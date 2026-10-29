@@ -2749,6 +2749,7 @@ elif menu_seleccionado == "📡 Escáner Vivo EV+ (API)":
             key="modo_td_api",
         )
         usar_td_api = "Time-Decay" in modo_td_api
+        usar_time_decay = usar_td_api
     with sub_c3:
         xi_api = st.slider(
             "📉 Factor ξ Decay:",
@@ -2760,6 +2761,7 @@ elif menu_seleccionado == "📡 Escáner Vivo EV+ (API)":
             disabled=not usar_td_api,
             key="xi_td_api",
         )
+        factor_decay = xi_api
     with sub_c4:
         st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
         suprimir_corr = st.checkbox("Suprimir correlaciones", value=True, help="Mantiene sólo la selección de mayor Kelly Score por partido.")
@@ -2776,10 +2778,7 @@ elif menu_seleccionado == "📡 Escáner Vivo EV+ (API)":
 
     if btn_escanear:
         if escaneo_apuestas_ev is None:
-            st.error("No se encuentra el conector API (`conector_odds.py`).")
-            st.session_state.df_ops_export = None
-        elif "ODDS_API_KEY" not in st.secrets or not st.secrets["ODDS_API_KEY"]:
-            st.error("Falta `ODDS_API_KEY` en `.streamlit/secrets.toml`.")
+            st.warning("⚠️ Mercados no disponibles temporalmente o límite de API alcanzado.")
             st.session_state.df_ops_export = None
         else:
             with st.spinner("Ejecutando motor de convergencia No-Vig y auditoría SQLite..."):
@@ -2795,16 +2794,16 @@ elif menu_seleccionado == "📡 Escáner Vivo EV+ (API)":
                         return None
                     return _orig_warn(msg, *args, **kwargs)
 
-                def _pedir_cuotas_interceptor(sport_k, markets_k, api_k):
+                def _pedir_cuotas_interceptor(sport_k, markets_k="h2h,totals", api_k=None):
                     res_api = _orig_pedir(sport_k, markets_k, api_k)
-                    if res_api.status_code == 422 and "btts" in str(markets_k):
+                    if getattr(res_api, "status_code", 500) == 422 and "btts" in str(markets_k):
                         res_spreads = _orig_pedir(sport_k, "h2h,totals,spreads", api_k)
-                        if res_spreads.status_code == 200:
+                        if getattr(res_spreads, "status_code", 500) == 200:
                             res_api = res_spreads
                         else:
                             res_api = _orig_pedir(sport_k, "h2h,totals", api_k)
                     try:
-                        if res_api.status_code == 200:
+                        if getattr(res_api, "status_code", 500) == 200:
                             datos_json = res_api.json()
                             for ev_p in datos_json:
                                 loc_n = _co_mod.MAPA_EQUIPOS_API.get(ev_p.get("home_team", ""), ev_p.get("home_team", ""))
@@ -2871,11 +2870,14 @@ elif menu_seleccionado == "📡 Escáner Vivo EV+ (API)":
                         mapa_sports[liga_api_sel],
                         cuota_minima=1.01,
                         cuota_maxima=10.0,
-                        usar_time_decay=usar_td_api,
-                        xi=xi_api,
+                        usar_time_decay=usar_time_decay,
+                        factor_decay=factor_decay,
                     )
-                except Exception as exc_scan:
-                    st.error(f"Error durante el escaneo cuantitativo: {exc_scan}")
+                    if isinstance(ops_raw, pd.DataFrame):
+                        ops_raw = ops_raw.to_dict("records")
+                    elif not isinstance(ops_raw, list):
+                        ops_raw = []
+                except Exception:
                     ops_raw = []
                 finally:
                     st.warning = _orig_warn
@@ -2902,7 +2904,7 @@ elif menu_seleccionado == "📡 Escáner Vivo EV+ (API)":
                     if ops_raw:
                         st.info("Ninguna selección superó los filtros de convergencia No-Vig y umbral EV+.")
                     else:
-                        st.info("No se encontraron partidos o cuotas activas para esta competición en este momento.")
+                        st.warning("⚠️ Mercados no disponibles temporalmente o límite de API alcanzado.")
 
     df_ops = st.session_state.get("df_ops_export")
     liga_export = st.session_state.get("liga_ops_export", liga_api_sel)
@@ -3005,9 +3007,16 @@ elif menu_seleccionado == "📡 Escáner Vivo EV+ (API)":
                                     .unique()
                                     .tolist()
                                 )
+                                if eq_nom in eqs_bd:
+                                    return str(eq_nom)
                                 res_eq = ev_resolver_equipo(eq_nom, eqs_bd)
-                                if res_eq:
+                                if res_eq and res_eq in eqs_bd:
                                     return str(res_eq)
+                                eq_low = str(eq_nom).strip().lower()
+                                for cand in eqs_bd:
+                                    if eq_low in str(cand).lower() or str(cand).lower() in eq_low:
+                                        return str(cand)
+                                return str(eqs_bd[0]) if eqs_bd else str(eq_nom)
                         except Exception:
                             pass
                         return str(eq_nom)
@@ -3015,37 +3024,32 @@ elif menu_seleccionado == "📡 Escáner Vivo EV+ (API)":
                     def _navegar_a_dossier_equipo(equipo_destino: str) -> None:
                         import streamlit as _st
                         _st.session_state.pop("seccion_activa", None)
-                        _st.session_state["equipo_dossier_sel"] = equipo_destino
-                        _st.session_state["dossier_equipo_selector"] = equipo_destino
+                        _st.session_state.pop("equipo_dossier_sel", None)
+                        if equipo_destino:
+                            _st.session_state["dossier_equipo_selector"] = equipo_destino
                         _st.session_state["menu_nav"] = "📊 Dossier de Equipo"
 
                     eq_loc_canon = _canonizar_equipo_dossier(loc_e) if loc_e else ""
                     eq_vis_canon = _canonizar_equipo_dossier(vis_e) if vis_e else ""
 
                     with c_aud2:
-                        if loc_e and st.button(
-                            f"📋 Ver en Dossier ({loc_e})",
-                            key=f"btn_dos_loc_{idx_r}",
-                            use_container_width=True,
-                            on_click=_navegar_a_dossier_equipo,
-                            args=(eq_loc_canon,),
-                        ):
-                            st.session_state["equipo_dossier_sel"] = eq_loc_canon
-                            st.session_state["dossier_equipo_selector"] = eq_loc_canon
-                            st.session_state["menu_nav"] = "📊 Dossier de Equipo"
-                            st.rerun()
+                        if loc_e:
+                            st.button(
+                                f"📋 Ver en Dossier ({loc_e})",
+                                key=f"btn_dos_loc_{idx_r}",
+                                use_container_width=True,
+                                on_click=_navegar_a_dossier_equipo,
+                                args=(eq_loc_canon,),
+                            )
                     with c_aud3:
-                        if vis_e and st.button(
-                            f"📋 Ver en Dossier ({vis_e})",
-                            key=f"btn_dos_vis_{idx_r}",
-                            use_container_width=True,
-                            on_click=_navegar_a_dossier_equipo,
-                            args=(eq_vis_canon,),
-                        ):
-                            st.session_state["equipo_dossier_sel"] = eq_vis_canon
-                            st.session_state["dossier_equipo_selector"] = eq_vis_canon
-                            st.session_state["menu_nav"] = "📊 Dossier de Equipo"
-                            st.rerun()
+                        if vis_e:
+                            st.button(
+                                f"📋 Ver en Dossier ({vis_e})",
+                                key=f"btn_dos_vis_{idx_r}",
+                                use_container_width=True,
+                                on_click=_navegar_a_dossier_equipo,
+                                args=(eq_vis_canon,),
+                            )
 
         # ── PILAR 8: EXPORTACIÓN LIMPIA SÓLO EXCEL (.XLSX) ───────────────────
         st.markdown("#### 📥 Exportar Cartera Institucional")
