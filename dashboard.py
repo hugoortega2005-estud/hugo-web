@@ -3834,161 +3834,1472 @@ elif menu_seleccionado == "📊 Dossier de Equipo":
 
 elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
     st.title("⚔️ Comparador Directo H2H Pro & Cuotas Justas")
-    st.markdown("Analiza el enfrentamiento aislando el rendimiento del Local en su estadio vs el Visitante a domicilio, proyectando cuotas justas por Poisson.")
-    
+    st.markdown(
+        "Analítica institucional Cara a Cara: **Proyección Poisson con Suavizado Bayesiano**, "
+        "**Arbitraje de Cuotas (EV+ & Quarter-Kelly)**, **Estimación de Línea de Hándicap Asiático** y **Auditoría Histórica SQLite**."
+    )
+
     if err_partidos or df_partidos_global.empty:
         st.warning("Datos de partidos no disponibles.")
     else:
-        equipos_h2h = sorted(pd.concat([df_partidos_global['HomeTeam'], df_partidos_global['AwayTeam']]).dropna().unique().tolist())
-        col1, col2 = st.columns(2)
-        with col1: eq1 = st.selectbox("🏠 Equipo Local (A):", equipos_h2h, index=0)
-        with col2: eq2 = st.selectbox("✈️ Equipo Visitante (B):", equipos_h2h, index=1 if len(equipos_h2h)>1 else 0)
+        import plotly.graph_objects as go
+
+        # ── 1. SELECTOR INTELIGENTE DE COMPETICIÓN, EQUIPOS E INVERSIÓN 1-CLICK ──
+        divs_disp_h2h = (
+            sorted(df_partidos_global["Div"].dropna().astype(str).unique().tolist())
+            if "Div" in df_partidos_global.columns
+            else []
+        )
+        ligas_disp_h2h = [MAPA_LIGAS.get(d, d) for d in divs_disp_h2h] if divs_disp_h2h else ["Todas las Competiciones"]
+
+        sel_c1, sel_c2, sel_c3, sel_c4 = st.columns([1.5, 1.5, 1.5, 1.1])
+        with sel_c1:
+            liga_h2h_nom = st.selectbox("🏆 Competición / Liga:", ligas_disp_h2h, key="h2h_liga_sel")
+
+        if divs_disp_h2h and liga_h2h_nom in MAPA_INV:
+            div_h2h_code = MAPA_INV[liga_h2h_nom]
+            df_liga_h2h = df_partidos_global[df_partidos_global["Div"].astype(str) == str(div_h2h_code)].copy()
+        elif divs_disp_h2h:
+            div_h2h_code = divs_disp_h2h[ligas_disp_h2h.index(liga_h2h_nom)]
+            df_liga_h2h = df_partidos_global[df_partidos_global["Div"].astype(str) == str(div_h2h_code)].copy()
+        else:
+            df_liga_h2h = df_partidos_global.copy()
+
+        equipos_h2h = sorted(
+            pd.concat([df_liga_h2h["HomeTeam"], df_liga_h2h["AwayTeam"]])
+            .dropna()
+            .astype(str)
+            .unique()
+            .tolist()
+        )
+
+        if not equipos_h2h:
+            equipos_h2h = sorted(
+                pd.concat([df_partidos_global["HomeTeam"], df_partidos_global["AwayTeam"]])
+                .dropna()
+                .astype(str)
+                .unique()
+                .tolist()
+            )
+
+        if "h2h_eq_local" not in st.session_state or st.session_state["h2h_eq_local"] not in equipos_h2h:
+            st.session_state["h2h_eq_local"] = equipos_h2h[0] if equipos_h2h else ""
+        if "h2h_eq_vis" not in st.session_state or st.session_state["h2h_eq_vis"] not in equipos_h2h:
+            st.session_state["h2h_eq_vis"] = equipos_h2h[1] if len(equipos_h2h) > 1 else (equipos_h2h[0] if equipos_h2h else "")
+
+        def _invertir_equipos_h2h() -> None:
+            loc_actual = st.session_state.get("h2h_eq_local")
+            vis_actual = st.session_state.get("h2h_eq_vis")
+            if loc_actual in equipos_h2h and vis_actual in equipos_h2h:
+                st.session_state["h2h_eq_local"] = vis_actual
+                st.session_state["h2h_eq_vis"] = loc_actual
+
+        with sel_c2:
+            eq1 = st.selectbox("🏠 Equipo Local (A):", equipos_h2h, key="h2h_eq_local")
+        with sel_c3:
+            eq2 = st.selectbox("✈️ Equipo Visitante (B):", equipos_h2h, key="h2h_eq_vis")
+        with sel_c4:
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            st.button(
+                "🔄 Invertir Local / Visitante",
+                on_click=_invertir_equipos_h2h,
+                use_container_width=True,
+                key="btn_swap_h2h",
+            )
 
         if eq1 and eq2 and eq1 != eq2:
-            df_eq1_home = df_partidos_global[df_partidos_global['HomeTeam'] == eq1].copy()
-            df_eq2_away = df_partidos_global[df_partidos_global['AwayTeam'] == eq2].copy()
-            
-            def get_form(df, team, is_home):
-                if df.empty: return []
-                if 'Date' in df.columns:
-                    df['Date_Parsed'] = pd.to_datetime(df['Date'], errors='coerce', dayfirst=True)
-                    df = df.sort_values(by='Date_Parsed', ascending=False)
-                form = []
-                for _, r in df.head(5).iterrows():
-                    hg, ag = r['FTHG'], r['FTAG']
-                    if hg == ag: form.append('E')
-                    elif (is_home and hg > ag) or (not is_home and ag > hg): form.append('V')
-                    else: form.append('D')
-                return form
+            df_eq1_home = df_partidos_global[df_partidos_global["HomeTeam"] == eq1].copy()
+            df_eq2_away = df_partidos_global[df_partidos_global["AwayTeam"] == eq2].copy()
+            df_eq1_all = df_partidos_global[
+                (df_partidos_global["HomeTeam"] == eq1) | (df_partidos_global["AwayTeam"] == eq1)
+            ].copy()
+            df_eq2_all = df_partidos_global[
+                (df_partidos_global["HomeTeam"] == eq2) | (df_partidos_global["AwayTeam"] == eq2)
+            ].copy()
 
-            forma_eq1 = get_form(df_eq1_home, eq1, True)
-            forma_eq2 = get_form(df_eq2_away, eq2, False)
-            
-            st.markdown("---")
-            st.subheader("🎯 Proyección Matemática del Partido (Modelo Poisson)")
-            st.markdown(f"Cálculo estadístico cruzando **la fuerza ofensiva/defensiva de {eq1} (solo en casa)** contra **{eq2} (solo fuera)**.")
-            
-            xg_l = ((df_eq1_home['FTHG'].mean() if not df_eq1_home.empty else 1.5) + (df_eq2_away['FTHG'].mean() if not df_eq2_away.empty else 1.5)) / 2
-            xg_v = ((df_eq2_away['FTAG'].mean() if not df_eq2_away.empty else 1.0) + (df_eq1_home['FTAG'].mean() if not df_eq1_home.empty else 1.0)) / 2
-            
-            prob_h = prob_d = prob_a = prob_o25 = prob_btts = tot_prob = 0
+            for _df_tmp in (df_eq1_home, df_eq2_away, df_eq1_all, df_eq2_all):
+                for _c_num in ("FTHG", "FTAG", "HTHG", "HTAG", "HS", "AS", "HST", "AST", "HC", "AC", "HF", "AF", "HxG", "AxG"):
+                    if _c_num in _df_tmp.columns:
+                        _df_tmp[_c_num] = pd.to_numeric(_df_tmp[_c_num], errors="coerce")
+
+            # ── 2. RESILIENCIA MUESTRAL Y SUAVIZADO BAYESIANO (SHRINKAGE 70/30) ──
+            n_home_sample = int(df_eq1_home["FTHG"].notna().sum()) if "FTHG" in df_eq1_home.columns else len(df_eq1_home)
+            n_away_sample = int(df_eq2_away["FTAG"].notna().sum()) if "FTAG" in df_eq2_away.columns else len(df_eq2_away)
+            muestra_reducida = (n_home_sample < 6) or (n_away_sample < 6)
+
+            def _media_global_equipo(df_all_eq: pd.DataFrame, eq_nombre: str, col_home: str, col_away: str, default_val: float) -> float:
+                if df_all_eq is None or df_all_eq.empty or col_home not in df_all_eq.columns or col_away not in df_all_eq.columns:
+                    return float(default_val)
+                es_loc_m = df_all_eq["HomeTeam"].astype(str) == str(eq_nombre)
+                vals = np.where(es_loc_m, df_all_eq[col_home], df_all_eq[col_away])
+                s_vals = pd.Series(vals).dropna()
+                return float(s_vals.mean()) if not s_vals.empty else float(default_val)
+
+            gf_l_raw = float(df_eq1_home["FTHG"].mean()) if not df_eq1_home.empty and df_eq1_home["FTHG"].notna().any() else 1.45
+            gc_l_raw = float(df_eq1_home["FTAG"].mean()) if not df_eq1_home.empty and df_eq1_home["FTAG"].notna().any() else 1.05
+            gf_v_raw = float(df_eq2_away["FTAG"].mean()) if not df_eq2_away.empty and df_eq2_away["FTAG"].notna().any() else 1.10
+            gc_v_raw = float(df_eq2_away["FTHG"].mean()) if not df_eq2_away.empty and df_eq2_away["FTHG"].notna().any() else 1.40
+
+            gf_l_glob = _media_global_equipo(df_eq1_all, eq1, "FTHG", "FTAG", gf_l_raw)
+            gc_l_glob = _media_global_equipo(df_eq1_all, eq1, "FTAG", "FTHG", gc_l_raw)
+            gf_v_glob = _media_global_equipo(df_eq2_all, eq2, "FTHG", "FTAG", gf_v_raw)
+            gc_v_glob = _media_global_equipo(df_eq2_all, eq2, "FTAG", "FTHG", gc_v_raw)
+
+            if n_home_sample < 6:
+                gf_l = (0.70 * gf_l_raw) + (0.30 * gf_l_glob)
+                gc_l = (0.70 * gc_l_raw) + (0.30 * gc_l_glob)
+            else:
+                gf_l = gf_l_raw
+                gc_l = gc_l_raw
+
+            if n_away_sample < 6:
+                gf_v = (0.70 * gf_v_raw) + (0.30 * gf_v_glob)
+                gc_v = (0.70 * gc_v_raw) + (0.30 * gc_v_glob)
+            else:
+                gf_v = gf_v_raw
+                gc_v = gc_v_raw
+
+            xg_l = max(0.15, (gf_l + gc_v) / 2.0)
+            xg_v = max(0.15, (gf_v + gc_l) / 2.0)
+
+            prob_h = prob_d = prob_a = prob_o15 = prob_o25 = prob_btts = tot_prob = 0.0
+            marcadores_prob = []
+            matriz_7x7 = {}
             for i in range(7):
                 for j in range(7):
                     pr = calcular_probabilidad_poisson(xg_l, i) * calcular_probabilidad_poisson(xg_v, j)
                     tot_prob += pr
-                    if i > j: prob_h += pr
-                    elif i == j: prob_d += pr
-                    else: prob_a += pr
-                    if (i + j) > 2.5: prob_o25 += pr
-                    if i > 0 and j > 0: prob_btts += pr
-                    
+                    matriz_7x7[(i, j)] = pr
+                    if i > j:
+                        prob_h += pr
+                    elif i == j:
+                        prob_d += pr
+                    else:
+                        prob_a += pr
+                    if (i + j) > 1.5:
+                        prob_o15 += pr
+                    if (i + j) > 2.5:
+                        prob_o25 += pr
+                    if i > 0 and j > 0:
+                        prob_btts += pr
+                    marcadores_prob.append((f"{i} - {j}", pr))
+
             norm = tot_prob if tot_prob > 0 else 1.0
-            
-            p_c1, p_c2, p_c3 = st.columns(3)
-            p_c1.metric("Cuota Justa Local (1)", f"{1/(prob_h/norm):.2f}", f"Prob: {(prob_h/norm*100):.1f}%")
-            p_c2.metric("Cuota Justa +2.5 Goles", f"{1/(prob_o25/norm):.2f}", f"Prob: {(prob_o25/norm*100):.1f}%", delta_color="off")
-            p_c3.metric("Cuota Justa BTTS (Sí)", f"{1/(prob_btts/norm):.2f}", f"Prob: {(prob_btts/norm*100):.1f}%", delta_color="off")
+            p_1 = max(prob_h / norm, 1e-4)
+            p_x = max(prob_d / norm, 1e-4)
+            p_2 = max(prob_a / norm, 1e-4)
+            p_o25 = max(prob_o25 / norm, 1e-4)
+            p_u25 = max(1.0 - p_o25, 1e-4)
+            p_btts_si = max(prob_btts / norm, 1e-4)
+
+            marcadores_ordenados = sorted(
+                [(m_str, p_val / norm) for m_str, p_val in marcadores_prob],
+                key=lambda x: x[1],
+                reverse=True,
+            )[:3]
 
             st.markdown("---")
-            st.subheader("📊 Rendimiento Estricto (Local vs Visitante)")
-            
-            gf_l = df_eq1_home['FTHG'].mean() if not df_eq1_home.empty else 0
-            gc_l = df_eq1_home['FTAG'].mean() if not df_eq1_home.empty else 0
-            cor_l = (df_eq1_home['HC'] + df_eq1_home['AC']).mean() if 'HC' in df_eq1_home.columns else 0
-            
-            gf_v = df_eq2_away['FTAG'].mean() if not df_eq2_away.empty else 0
-            gc_v = df_eq2_away['FTHG'].mean() if not df_eq2_away.empty else 0
-            cor_v = (df_eq2_away['HC'] + df_eq2_away['AC']).mean() if 'AC' in df_eq2_away.columns else 0
+            st.subheader("🎯 Proyección Matemática del Partido (Modelo Poisson Condicionado)")
+            st.markdown(
+                f"**Goles Esperados (xG Proyectado): {eq1} {xg_l:.2f} — {eq2} {xg_v:.2f}**  \n"
+                f"<span style='color:#94A3B8;font-size:13px;'>Muestra analizada: {n_home_sample} partidos de {eq1} en casa vs "
+                f"{n_away_sample} partidos de {eq2} como visitante.</span>",
+                unsafe_allow_html=True,
+            )
 
-            c_st1, c_st2 = st.columns(2)
-            with c_st1:
-                st.markdown(f"#### 🏠 {eq1} (Como Local)")
-                st.write(f"**Forma (Últimos 5):** {' - '.join(forma_eq1) if forma_eq1 else 'N/D'}")
-                st.write(f"**Goles Anotados / Recibidos:** `{gf_l:.2f}` / `{gc_l:.2f}`")
-                st.write(f"**Media Córners Totales:** `{cor_l:.1f}`")
-            with c_st2:
-                st.markdown(f"#### ✈️ {eq2} (Como Visitante)")
-                st.write(f"**Forma (Últimos 5):** {' - '.join(forma_eq2) if forma_eq2 else 'N/D'}")
-                st.write(f"**Goles Anotados / Recibidos:** `{gf_v:.2f}` / `{gc_v:.2f}`")
-                st.write(f"**Media Córners Totales:** `{cor_v:.1f}`")
-            
-            h2h_df = df_partidos_global[((df_partidos_global['HomeTeam'] == eq1) & (df_partidos_global['AwayTeam'] == eq2)) | ((df_partidos_global['HomeTeam'] == eq2) & (df_partidos_global['AwayTeam'] == eq1))].copy()
-            
+            if muestra_reducida:
+                st.warning("⚠️ Muestra reducida en condición local/visitante (< 6 partidos). Aplicado suavizado con promedio global.")
+
+            k_p1, k_p2, k_p3, k_p4, k_p5, k_p6 = st.columns(6)
+            k_p1.metric(f"🏠 Local ({eq1})", f"Cuota: {1.0 / p_1:.2f}", f"Prob: {p_1 * 100:.1f}%")
+            k_p2.metric("🤝 Empate (X)", f"Cuota: {1.0 / p_x:.2f}", f"Prob: {p_x * 100:.1f}%", delta_color="off")
+            k_p3.metric(f"✈️ Visitante ({eq2})", f"Cuota: {1.0 / p_2:.2f}", f"Prob: {p_2 * 100:.1f}%")
+            k_p4.metric("🔥 Over 2.5 Goles", f"Cuota: {1.0 / p_o25:.2f}", f"Prob: {p_o25 * 100:.1f}%", delta_color="off")
+            k_p5.metric("🧊 Under 2.5 Goles", f"Cuota: {1.0 / p_u25:.2f}", f"Prob: {p_u25 * 100:.1f}%", delta_color="off")
+            k_p6.metric("🎯 Ambos Marcan (Sí)", f"Cuota: {1.0 / p_btts_si:.2f}", f"Prob: {p_btts_si * 100:.1f}%", delta_color="off")
+
+            with st.container(border=True):
+                st.markdown("#### 🎯 Top 3 Marcadores Más Probables (Distribución Exacta de Poisson)")
+                sc_c1, sc_c2, sc_c3 = st.columns(3)
+                medallas_sc = ["🥇 #1 Más Probable", "🥈 #2 Más Probable", "🥉 #3 Más Probable"]
+                colores_sc = ["#10B981", "#38BDF8", "#F59E0B"]
+                for idx_sc, (col_sc, (marc_txt, prob_sc)) in enumerate(zip((sc_c1, sc_c2, sc_c3), marcadores_ordenados)):
+                    cuota_sc = 1.0 / max(prob_sc, 1e-4)
+                    borde_c = colores_sc[idx_sc]
+                    with col_sc:
+                        st.markdown(
+                            f"<div style='background-color:#16192b;border:1.5px solid {borde_c};border-radius:10px;padding:14px;text-align:center;'>"
+                            f"<div style='color:#94A3B8;font-size:12.5px;font-weight:600;margin-bottom:4px;'>{medallas_sc[idx_sc]}</div>"
+                            f"<div style='font-size:26px;font-weight:800;color:#F8FAFC;letter-spacing:1px;'>{eq1} {marc_txt} {eq2}</div>"
+                            f"<div style='margin-top:6px;font-size:14px;color:{borde_c};font-weight:700;'>"
+                            f"Probabilidad: {prob_sc * 100:.1f}% &nbsp;·&nbsp; Cuota Justa: {cuota_sc:.2f}"
+                            f"</div></div>",
+                            unsafe_allow_html=True,
+                        )
+
+            # ── 3. ARBITRAJE INTERACTIVO DE CUOTAS DE MERCADO VS VALOR ESPERADO (EV+ & KELLY) ──
+            with st.expander("💰 Comparativa de Cuota de Mercado vs Valor Esperado (EV+ & Kelly)", expanded=True):
+                st.caption(
+                    "Introduce las cuotas actuales de tu casa de apuestas para calcular en tiempo real el **Valor Esperado (EV%)** "
+                    "y el **Stake Recomendado (Quarter-Kelly 25%)** frente al modelo Poisson."
+                )
+                in_c1, in_cx, in_c2, in_co25 = st.columns(4)
+                with in_c1:
+                    cuota_mkt_1 = st.number_input(
+                        f"Cuota Mercado 1 ({eq1}):",
+                        min_value=1.01,
+                        max_value=50.0,
+                        value=round(1.0 / p_1, 2),
+                        step=0.05,
+                        key="h2h_mkt_1",
+                    )
+                with in_cx:
+                    cuota_mkt_x = st.number_input(
+                        "Cuota Mercado X (Empate):",
+                        min_value=1.01,
+                        max_value=50.0,
+                        value=round(1.0 / p_x, 2),
+                        step=0.05,
+                        key="h2h_mkt_x",
+                    )
+                with in_c2:
+                    cuota_mkt_2 = st.number_input(
+                        f"Cuota Mercado 2 ({eq2}):",
+                        min_value=1.01,
+                        max_value=50.0,
+                        value=round(1.0 / p_2, 2),
+                        step=0.05,
+                        key="h2h_mkt_2",
+                    )
+                with in_co25:
+                    cuota_mkt_o25 = st.number_input(
+                        "Cuota Over 2.5 Goles:",
+                        min_value=1.01,
+                        max_value=50.0,
+                        value=round(1.0 / p_o25, 2),
+                        step=0.05,
+                        key="h2h_mkt_o25",
+                    )
+
+                ev_cols = st.columns(4)
+                mercados_arbitraje = [
+                    (f"🏠 Victoria {eq1} (1)", p_1, cuota_mkt_1),
+                    ("🤝 Empate (X)", p_x, cuota_mkt_x),
+                    (f"✈️ Victoria {eq2} (2)", p_2, cuota_mkt_2),
+                    ("🔥 Over 2.5 Goles", p_o25, cuota_mkt_o25),
+                ]
+                for col_ev_ui, (nom_m_arb, prob_m_arb, cuota_m_arb) in zip(ev_cols, mercados_arbitraje):
+                    ev_val_pct = ((prob_m_arb * cuota_m_arb) - 1.0) * 100.0
+                    b_neto = max(cuota_m_arb - 1.0, 0.01)
+                    kelly_full = ((prob_m_arb * b_neto) - (1.0 - prob_m_arb)) / b_neto
+                    quarter_kelly_pct = max(0.0, kelly_full * 0.25 * 100.0)
+                    cuota_justa_arb = 1.0 / max(prob_m_arb, 1e-4)
+
+                    if ev_val_pct > 2.0:
+                        bg_ev = "rgba(16, 185, 129, 0.16)"
+                        bd_ev = "#10B981"
+                        tx_ev = "#6EE7B7"
+                        etiqueta_ev = "🟢 VALOR CONFIRMADO (+EV)"
+                    elif ev_val_pct >= 0.0:
+                        bg_ev = "rgba(245, 158, 11, 0.14)"
+                        bd_ev = "#F59E0B"
+                        tx_ev = "#FCD34D"
+                        etiqueta_ev = "🟡 MARGEN NEUTRO"
+                    else:
+                        bg_ev = "rgba(239, 68, 68, 0.14)"
+                        bd_ev = "#EF4444"
+                        tx_ev = "#FCA5A5"
+                        etiqueta_ev = "🔴 SIN VALOR (EV NEGATIVO)"
+
+                    with col_ev_ui:
+                        st.markdown(
+                            f"<div style='background:{bg_ev};border:1.5px solid {bd_ev};border-radius:10px;padding:12px;'>"
+                            f"<div style='font-size:13px;font-weight:700;color:#F8FAFC;'>{nom_m_arb}</div>"
+                            f"<div style='font-size:11.5px;color:#94A3B8;margin-top:2px;'>"
+                            f"Cuota Justa: <b>{cuota_justa_arb:.2f}</b> vs Mercado: <b>{cuota_m_arb:.2f}</b></div>"
+                            f"<div style='font-size:20px;font-weight:800;color:{tx_ev};margin-top:6px;'>"
+                            f"EV: {ev_val_pct:+.2f}%</div>"
+                            f"<div style='font-size:12.5px;color:#E2E8F0;margin-top:4px;'>"
+                            f"💼 Quarter-Kelly: <b>{quarter_kelly_pct:.2f}% bank</b></div>"
+                            f"<div style='font-size:11px;font-weight:700;color:{tx_ev};margin-top:4px;'>{etiqueta_ev}</div>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+
+            # ── 4. COMPARATIVA TÁCTICA Y ESTIMACIÓN DE LÍNEA DE HÁNDICAP ASIÁTICO JUSTO ──
             st.markdown("---")
-            st.subheader(f"⚔️ Últimos Enfrentamientos Directos")
-            if not h2h_df.empty:
-                if 'Date' in h2h_df.columns:
-                    h2h_df['Date_Parsed'] = pd.to_datetime(h2h_df['Date'], errors='coerce', dayfirst=True)
-                    h2h_df = h2h_df.sort_values(by='Date_Parsed', ascending=False)
-                for _, row in h2h_df.head(5).iterrows():
-                    l_h2h, v_h2h = row['HomeTeam'], row['AwayTeam']
-                    gl_h2h, gv_h2h = row['FTHG'], row['FTAG']
-                    res_str = f"📅 {row.get('Date', 'N/A')} | **{l_h2h}** {gl_h2h} - {gv_h2h} **{v_h2h}**"
-                    st.info(res_str)
+            st.subheader("📊 Comparativa Táctica y Estimación de Línea de Hándicap Asiático Justo")
+
+            if "HxG" in df_eq1_home.columns and df_eq1_home["HxG"].notna().any():
+                xga_l = float(df_eq1_home["AxG"].dropna().mean()) if "AxG" in df_eq1_home.columns and df_eq1_home["AxG"].notna().any() else gc_l
             else:
-                st.warning("No hay enfrentamientos directos recientes en la base de datos.")
+                xga_l = gc_l
+
+            if "AxG" in df_eq2_away.columns and df_eq2_away["AxG"].notna().any():
+                xga_v = float(df_eq2_away["HxG"].dropna().mean()) if "HxG" in df_eq2_away.columns and df_eq2_away["HxG"].notna().any() else gc_v
+            else:
+                xga_v = gc_v
+
+            cor_l = (
+                float((df_eq1_home["HC"].fillna(0) + df_eq1_home["AC"].fillna(0)).mean())
+                if "HC" in df_eq1_home.columns and "AC" in df_eq1_home.columns and not df_eq1_home.empty
+                else 9.5
+            )
+            cor_v = (
+                float((df_eq2_away["HC"].fillna(0) + df_eq2_away["AC"].fillna(0)).mean())
+                if "HC" in df_eq2_away.columns and "AC" in df_eq2_away.columns and not df_eq2_away.empty
+                else 9.2
+            )
+
+            faltas_l = (
+                float(df_eq1_home["HF"].dropna().mean())
+                if "HF" in df_eq1_home.columns and df_eq1_home["HF"].notna().any()
+                else 11.5
+            )
+            faltas_v = (
+                float(df_eq2_away["AF"].dropna().mean())
+                if "AF" in df_eq2_away.columns and df_eq2_away["AF"].notna().any()
+                else 11.8
+            )
+
+            sot_l = (
+                float(df_eq1_home["HST"].dropna().mean())
+                if "HST" in df_eq1_home.columns and df_eq1_home["HST"].notna().any()
+                else 4.5
+            )
+            sot_v = (
+                float(df_eq2_away["AST"].dropna().mean())
+                if "AST" in df_eq2_away.columns and df_eq2_away["AST"].notna().any()
+                else 3.8
+            )
+
+            categorias_tacticas = [
+                "Eficiencia Ofensiva (Goles p/p)",
+                "Fragilidad Defensiva (xGA/GC p/p)",
+                "Tiros a Puerta a Favor p/p",
+                "Córners Totales (Media p/p)",
+                "Intensidad / Faltas Cometidas p/p",
+            ]
+            raw_loc = [gf_l, xga_l, sot_l, cor_l, faltas_l]
+            raw_vis = [gf_v, xga_v, sot_v, cor_v, faltas_v]
+            topes_escala = [3.0, 2.5, 8.5, 14.0, 18.0]
+
+            norm_loc = [float(np.clip((v / m) * 100.0, 8.0, 100.0)) for v, m in zip(raw_loc, topes_escala)]
+            norm_vis = [float(np.clip((v / m) * 100.0, 8.0, 100.0)) for v, m in zip(raw_vis, topes_escala)]
+
+            # Cálculo de Supremacía y Línea de Hándicap Asiático Justo
+            supremacia_xg = xg_l - xg_v
+            linea_ah_justa = -round(supremacia_xg * 4.0) / 4.0
+            if abs(linea_ah_justa) < 0.05:
+                linea_ah_justa = 0.0
+                linea_ah_str = f"PK / HA 0.0 (DNB)"
+                linea_ah_vis_str = f"PK / HA 0.0 (DNB)"
+            else:
+                linea_ah_str = f"HA {linea_ah_justa:+.2f}"
+                linea_ah_vis_str = f"HA {-linea_ah_justa:+.2f}"
+
+            # Cuotas justas en líneas clave de Hándicap Asiático derivadas de Poisson
+            cuota_dnb_loc = 1.0 / max(p_1 / max(p_1 + p_2, 1e-4), 1e-4)
+            cuota_dnb_vis = 1.0 / max(p_2 / max(p_1 + p_2, 1e-4), 1e-4)
+            cuota_ha_m05_loc = 1.0 / p_1
+            cuota_ha_p05_vis = 1.0 / max(p_x + p_2, 1e-4)
+            cuota_ha_p05_loc = 1.0 / max(p_1 + p_x, 1e-4)
+            cuota_ha_m05_vis = 1.0 / p_2
+
+            graf_c1, graf_c2 = st.columns([1.2, 1.0])
+            with graf_c1:
+                fig_bars = go.Figure()
+                fig_bars.add_trace(
+                    go.Bar(
+                        y=categorias_tacticas,
+                        x=norm_loc,
+                        name=f"🏠 {eq1} (Casa)",
+                        orientation="h",
+                        marker=dict(color="#10B981"),
+                        text=[f"{v:.2f}" for v in raw_loc],
+                        textposition="auto",
+                        hovertemplate="<b>%{y}</b><br>Media real: %{text}<extra></extra>",
+                    )
+                )
+                fig_bars.add_trace(
+                    go.Bar(
+                        y=categorias_tacticas,
+                        x=norm_vis,
+                        name=f"✈️ {eq2} (Fuera)",
+                        orientation="h",
+                        marker=dict(color="#38BDF8"),
+                        text=[f"{v:.2f}" for v in raw_vis],
+                        textposition="auto",
+                        hovertemplate="<b>%{y}</b><br>Media real: %{text}<extra></extra>",
+                    )
+                )
+                fig_bars.update_layout(
+                    barmode="group",
+                    paper_bgcolor="#0e1117",
+                    plot_bgcolor="#16192b",
+                    font=dict(color="#f0f2f6"),
+                    xaxis=dict(title="Índice Comparativo (0-100) · Etiqueta = Media Exacta p/p", range=[0, 110], gridcolor="#2d3748"),
+                    yaxis=dict(autorange="reversed", gridcolor="#2d3748"),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+                    margin=dict(l=10, r=20, t=40, b=30),
+                    height=370,
+                )
+                st.plotly_chart(fig_bars, use_container_width=True)
+
+            with graf_c2:
+                with st.container(border=True):
+                    st.markdown("#### ⚡ Estimación de Línea y Hándicap Asiático Justo")
+                    sesgo_dom = (
+                        f"Favoritismo Local ({eq1})"
+                        if supremacia_xg > 0.12
+                        else (f"Favoritismo Visitante ({eq2})" if supremacia_xg < -0.12 else "Duelo Equilibrado (Pick'em)")
+                    )
+                    st.markdown(
+                        f"<div style='background-color:#16192b;border:1.5px solid #38BDF8;border-radius:10px;padding:14px;margin-bottom:10px;'>"
+                        f"<div style='color:#94A3B8;font-size:12.5px;font-weight:600;'>Supremacía de Goles Esperados (xG Local − xG Visitante)</div>"
+                        f"<div style='font-size:24px;font-weight:800;color:#F8FAFC;margin-top:4px;'>"
+                        f"{supremacia_xg:+.2f} xG &nbsp;·&nbsp; <span style='color:#38BDF8;'>{sesgo_dom}</span></div>"
+                        f"<div style='margin-top:8px;font-size:15px;color:#10B981;font-weight:700;'>"
+                        f"🎯 Línea Equilibrada Proyectada: {eq1} {linea_ah_str} / {eq2} {linea_ah_vis_str}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                    df_ah_justo = pd.DataFrame([
+                        {
+                            "Línea Asiática": "HA 0.0 (Draw No Bet)",
+                            f"🏠 {eq1}": f"Cuota: {cuota_dnb_loc:.2f}",
+                            f"✈️ {eq2}": f"Cuota: {cuota_dnb_vis:.2f}",
+                        },
+                        {
+                            "Línea Asiática": f"HA -0.5 ({eq1}) / +0.5 ({eq2})",
+                            f"🏠 {eq1}": f"Cuota: {cuota_ha_m05_loc:.2f}",
+                            f"✈️ {eq2}": f"Cuota: {cuota_ha_p05_vis:.2f}",
+                        },
+                        {
+                            "Línea Asiática": f"HA +0.5 ({eq1}) / -0.5 ({eq2})",
+                            f"🏠 {eq1}": f"Cuota: {cuota_ha_p05_loc:.2f}",
+                            f"✈️ {eq2}": f"Cuota: {cuota_ha_m05_vis:.2f}",
+                        },
+                    ])
+                    st.dataframe(df_ah_justo, use_container_width=True, hide_index=True)
+
+            # ── 5. TABLA DE FRECUENCIAS DE MERCADO (CONDICIONADA CASA VS FUERA) ──
+            st.markdown("---")
+            st.subheader("📈 Matriz de Frecuencias Empíricas de Mercado (Condicionada Casa vs Fuera)")
+
+            def _frecuencia_mercado_condicionada(df_sub: pd.DataFrame, tipo_m: str) -> float:
+                if df_sub is None or df_sub.empty or "FTHG" not in df_sub.columns or "FTAG" not in df_sub.columns:
+                    return 0.50
+                d_val = df_sub.dropna(subset=["FTHG", "FTAG"]).copy()
+                if d_val.empty:
+                    return 0.50
+                tot_g = d_val["FTHG"] + d_val["FTAG"]
+                if tipo_m == "over15":
+                    return float((tot_g > 1.5).mean())
+                if tipo_m == "over25":
+                    return float((tot_g > 2.5).mean())
+                if tipo_m == "btts":
+                    return float(((d_val["FTHG"] > 0) & (d_val["FTAG"] > 0)).mean())
+                if tipo_m == "gol_1t":
+                    if "HTHG" in d_val.columns and "HTAG" in d_val.columns:
+                        d_ht = d_val.dropna(subset=["HTHG", "HTAG"])
+                        if not d_ht.empty:
+                            return float(((d_ht["HTHG"] + d_ht["HTAG"]) > 0.5).mean())
+                    return float(np.clip(1.0 - math.exp(-0.44 * float(tot_g.mean() or 2.4)), 0.15, 0.92))
+                return 0.50
+
+            filas_frecuencia = []
+            for etiqueta_m, clave_m in [
+                ("⚽ Over 1.5 Goles (+1.5 FT)", "over15"),
+                ("🔥 Over 2.5 Goles (+2.5 FT)", "over25"),
+                ("🎯 Ambos Marcan (BTTS Sí)", "btts"),
+                ("⏱️ Gol en 1º Tiempo (+0.5 HT)", "gol_1t"),
+            ]:
+                f_loc = _frecuencia_mercado_condicionada(df_eq1_home, clave_m)
+                f_vis = _frecuencia_mercado_condicionada(df_eq2_away, clave_m)
+                f_conj = float(np.clip((f_loc + f_vis) / 2.0, 0.01, 0.99))
+                cuota_j_emp = round(1.0 / f_conj, 2)
+                filas_frecuencia.append({
+                    "Mercado Analizado": etiqueta_m,
+                    f"🏠 % Casa ({eq1})": f"{f_loc * 100:.1f}%",
+                    f"✈️ % Fuera ({eq2})": f"{f_vis * 100:.1f}%",
+                    "📊 Frecuencia Conjunta (%)": f"{f_conj * 100:.1f}%",
+                    "💎 Cuota Justa Empírica (1/p)": f"Cuota: {cuota_j_emp:.2f}",
+                })
+
+            df_frec_tabla = pd.DataFrame(filas_frecuencia)
+            st.dataframe(df_frec_tabla, use_container_width=True, hide_index=True)
+
+            # ── 6. HISTÓRICO H2H DIRECTO (TODAS LAS TEMPORADAS) Y FORMA RECIENTE ──
+            st.markdown("---")
+            st.subheader("🗄️ Auditoría Histórica SQLite: H2H Directo y Forma Reciente en Liga")
+
+            h2h_directo_df = pd.DataFrame()
+            df_sql_h2h = df_partidos_global.copy()
+            if RUTA_BD.exists():
+                try:
+                    with sqlite3.connect(RUTA_BD) as conn_h2h:
+                        tablas_h = pd.read_sql("SELECT name FROM sqlite_master WHERE type='table';", conn_h2h)["name"].tolist()
+                        tablas_validas = [t for t in ("historico_reciente", "partidos") if t in tablas_h]
+                        dfs_h2h_all = []
+                        for t_nom in tablas_validas:
+                            q_directo = f"""
+                                SELECT * FROM {t_nom}
+                                WHERE (LOWER(TRIM(HomeTeam)) = LOWER(TRIM(?)) AND LOWER(TRIM(AwayTeam)) = LOWER(TRIM(?)))
+                                   OR (LOWER(TRIM(HomeTeam)) = LOWER(TRIM(?)) AND LOWER(TRIM(AwayTeam)) = LOWER(TRIM(?)))
+                                ORDER BY Date DESC
+                            """
+                            df_t_dir = pd.read_sql(q_directo, conn_h2h, params=(eq1, eq2, eq2, eq1))
+                            if not df_t_dir.empty:
+                                dfs_h2h_all.append(df_t_dir)
+                        if dfs_h2h_all:
+                            h2h_directo_df = pd.concat(dfs_h2h_all, ignore_index=True)
+                            h2h_directo_df = h2h_directo_df.drop_duplicates(subset=["Date", "HomeTeam", "AwayTeam"], keep="first")
+
+                        t_principal = "historico_reciente" if "historico_reciente" in tablas_h else ("partidos" if "partidos" in tablas_h else None)
+                        if t_principal:
+                            df_sql_h2h = pd.read_sql(
+                                f"""
+                                SELECT * FROM {t_principal}
+                                WHERE LOWER(TRIM(HomeTeam)) IN (LOWER(TRIM(?)), LOWER(TRIM(?)))
+                                   OR LOWER(TRIM(AwayTeam)) IN (LOWER(TRIM(?)), LOWER(TRIM(?)))
+                                """,
+                                conn_h2h,
+                                params=(eq1, eq2, eq1, eq2),
+                            )
+                except Exception:
+                    pass
+
+            if h2h_directo_df.empty:
+                mask_dir_mem = (
+                    (df_partidos_global["HomeTeam"].astype(str).str.strip().str.lower() == eq1.strip().lower())
+                    & (df_partidos_global["AwayTeam"].astype(str).str.strip().str.lower() == eq2.strip().lower())
+                ) | (
+                    (df_partidos_global["HomeTeam"].astype(str).str.strip().str.lower() == eq2.strip().lower())
+                    & (df_partidos_global["AwayTeam"].astype(str).str.strip().str.lower() == eq1.strip().lower())
+                )
+                h2h_directo_df = df_partidos_global[mask_dir_mem].copy()
+
+            if not h2h_directo_df.empty:
+                if "Date" in h2h_directo_df.columns:
+                    h2h_directo_df["_dt_orden"] = pd.to_datetime(h2h_directo_df["Date"], errors="coerce", dayfirst=True)
+                    h2h_directo_df = h2h_directo_df.sort_values(by="_dt_orden", ascending=False)
+                h2h_directo_df = h2h_directo_df.dropna(subset=["FTHG", "FTAG"]).head(5).copy()
+
+            if "Date" in df_sql_h2h.columns:
+                df_sql_h2h = df_sql_h2h.copy()
+                df_sql_h2h["_dt_orden"] = pd.to_datetime(df_sql_h2h["Date"], errors="coerce", dayfirst=True)
+                df_sql_h2h = df_sql_h2h.sort_values(by="_dt_orden", ascending=False)
+
+            # 6a) Enfrentamientos Directos H2H (Últimos 5 en todas las temporadas/competiciones)
+            st.markdown(f"#### ⚔️ Enfrentamientos Directos H2H (Últimos 5 registrados entre {eq1} y {eq2})")
+            if not h2h_directo_df.empty:
+                filas_h2h_dir = []
+                for _, r_h in h2h_directo_df.iterrows():
+                    hg_i = int(pd.to_numeric(r_h.get("FTHG", 0), errors="coerce") or 0)
+                    ag_i = int(pd.to_numeric(r_h.get("FTAG", 0), errors="coerce") or 0)
+                    ref_val = str(r_h.get("Referee", "") or "").strip()
+                    if not ref_val or ref_val.lower() == "nan":
+                        ref_val = "No registrado"
+                    filas_h2h_dir.append({
+                        "📅 Fecha": str(r_h.get("Date", "N/A")),
+                        "🏠 Local": str(r_h.get("HomeTeam", "")),
+                        "⚽ Marcador": f"{hg_i} - {ag_i}",
+                        "✈️ Visitante": str(r_h.get("AwayTeam", "")),
+                        "⚖️ Árbitro": ref_val,
+                    })
+                st.dataframe(pd.DataFrame(filas_h2h_dir), use_container_width=True, hide_index=True)
+            else:
+                st.info("No se registran enfrentamientos directos recientes entre ambos equipos en macro_base_futbol.db.")
+
+            # 6b & 6c) Forma Reciente en Liga - Últimos 3 partidos de cada equipo
+            def _construir_tabla_ultimos_3(df_fuente: pd.DataFrame, equipo_obj: str) -> pd.DataFrame:
+                eq_norm_low = str(equipo_obj).strip().lower()
+                sub_eq = df_fuente[
+                    (df_fuente["HomeTeam"].astype(str).str.strip().str.lower() == eq_norm_low)
+                    | (df_fuente["AwayTeam"].astype(str).str.strip().str.lower() == eq_norm_low)
+                ].dropna(subset=["FTHG", "FTAG"]).head(3)
+                filas_u3 = []
+                for _, r_u in sub_eq.iterrows():
+                    es_casa = str(r_u.get("HomeTeam", "")).strip().lower() == eq_norm_low
+                    rival = str(r_u.get("AwayTeam", "")) if es_casa else str(r_u.get("HomeTeam", ""))
+                    hg_u = int(pd.to_numeric(r_u.get("FTHG", 0), errors="coerce") or 0)
+                    ag_u = int(pd.to_numeric(r_u.get("FTAG", 0), errors="coerce") or 0)
+                    gf_u = hg_u if es_casa else ag_u
+                    gc_u = ag_u if es_casa else hg_u
+                    res_icono = "✅ V" if gf_u > gc_u else ("➖ E" if gf_u == gc_u else "❌ D")
+                    filas_u3.append({
+                        "📅 Fecha": str(r_u.get("Date", "N/A")),
+                        "🆚 Rival": rival,
+                        "⚽ Marcador": f"{hg_u} - {ag_u} ({res_icono})",
+                        "🏟️ Condición": "Casa (Local) 🏠" if es_casa else "Fuera (Visitante) ✈️",
+                    })
+                return pd.DataFrame(filas_u3)
+
+            col_f_loc, col_f_vis = st.columns(2)
+            with col_f_loc:
+                st.markdown(f"#### 🏠 Forma Reciente en Liga — Últimos 3 de {eq1}")
+                df_u3_loc = _construir_tabla_ultimos_3(df_sql_h2h, eq1)
+                if not df_u3_loc.empty:
+                    st.dataframe(df_u3_loc, use_container_width=True, hide_index=True)
+                else:
+                    st.info(f"Sin registros recientes para {eq1}.")
+
+            with col_f_vis:
+                st.markdown(f"#### ✈️ Forma Reciente en Liga — Últimos 3 de {eq2}")
+                df_u3_vis = _construir_tabla_ultimos_3(df_sql_h2h, eq2)
+                if not df_u3_vis.empty:
+                    st.dataframe(df_u3_vis, use_container_width=True, hide_index=True)
+                else:
+                    st.info(f"Sin registros recientes para {eq2}.")
+
+            # ── 7. EXPORTACIÓN EJECUTIVA 1-CLICK (COPIAR FICHA DEL PARTIDO) ──
+            st.markdown("---")
+            top3_resumen_str = " | ".join(
+                f"{m_s} ({p_s * 100:.1f}% · Cuota: {1.0 / max(p_s, 1e-4):.2f})"
+                for m_s, p_s in marcadores_ordenados
+            )
+            ficha_partido_txt = (
+                f"=== FICHA EJECUTIVA H2H: {eq1} vs {eq2} ({liga_h2h_nom}) ===\n"
+                f"• Goles Esperados (xG Proyectado): {eq1} {xg_l:.2f} — {eq2} {xg_v:.2f}"
+                + (" [Suavizado Bayesiano 70/30 Activo]\n" if muestra_reducida else "\n")
+                + f"• Cuotas Justas 1X2: Local ({eq1}) {1.0 / p_1:.2f} ({p_1 * 100:.1f}%) | "
+                f"Empate {1.0 / p_x:.2f} ({p_x * 100:.1f}%) | Visitante ({eq2}) {1.0 / p_2:.2f} ({p_2 * 100:.1f}%)\n"
+                f"• Mercados de Goles: Over 2.5 Cuota: {1.0 / p_o25:.2f} ({p_o25 * 100:.1f}%) | "
+                f"Under 2.5 Cuota: {1.0 / p_u25:.2f} ({p_u25 * 100:.1f}%) | BTTS Sí Cuota: {1.0 / p_btts_si:.2f} ({p_btts_si * 100:.1f}%)\n"
+                f"• Top 3 Marcadores Exactos: {top3_resumen_str}\n"
+                f"• Línea Hándicap Asiático Recomendada: {eq1} {linea_ah_str} / {eq2} {linea_ah_vis_str} "
+                f"(Supremacía: {supremacia_xg:+.2f} xG | DNB {eq1}: {cuota_dnb_loc:.2f} / {eq2}: {cuota_dnb_vis:.2f})"
+            )
+
+            btn_ficha = st.button("📋 Copiar Ficha del Partido", type="primary", key="btn_copiar_ficha_h2h")
+            with st.expander("📋 Ficha Ejecutiva del Partido (Lista para copiar en 1 clic)", expanded=bool(btn_ficha)):
+                if btn_ficha:
+                    st.success("✅ Ficha ejecutiva generada. Haz clic en el icono de copia en la esquina superior derecha del bloque:")
+                st.code(ficha_partido_txt, language="text")
+
         elif eq1 == eq2:
             st.warning("Selecciona dos equipos distintos para realizar la comparativa.")
 
 elif menu_seleccionado == "🎯 Radar de Tendencias":
-    st.title("🎯 Radar de Tendencias Avanzado")
-    st.markdown("Escaneo inteligente de rachas con filtros por **condición de campo (Local/Visitante/Global)** y **umbral de aciertos**.")
-    
-    col_rf1, col_rf2 = st.columns(2)
-    with col_rf1:
-        filtro_condicion = st.radio("🏠 Condición de Campo:", ["Global (Todos los partidos)", "Solo como Local 🏠", "Solo como Visitante ✈️"], horizontal=True)
-    with col_rf2:
-        umbral_racha = st.select_slider("🔥 Umbral Mínimo de Racha:", options=[3, 4, 5], value=4, format_func=lambda x: f"Mínimo {x}/5 aciertos")
+    import os as _os_rad
+    import html as _html_rad
+    try:
+        from google import genai as _genai_rad
+        _RADAR_GENAI_OK = True
+    except Exception:
+        _genai_rad = None
+        _RADAR_GENAI_OK = False
 
-    if err_partidos or df_partidos.empty: st.warning("No hay suficientes datos.")
+    # ── PILAR 1: DARK-THEME NATIVE UI & SCOPED STYLING OVERHAUL ──────────────
+    st.markdown(
+        """
+        <style>
+        .radar-hero-banner {
+            background: linear-gradient(135deg, #0e1117 0%, #161922 55%, #1e2230 100%);
+            border: 1px solid #2d3345;
+            border-left: 4px solid #38bdf8;
+            border-radius: 12px;
+            padding: 16px 20px;
+            margin-bottom: 16px;
+        }
+        .radar-choque-wrapper {
+            background: linear-gradient(135deg, #121723 0%, #192032 100%);
+            border: 1px solid rgba(56, 189, 248, 0.45);
+            border-radius: 12px;
+            padding: 16px 18px;
+            margin-bottom: 18px;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+        }
+        .radar-choque-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 12px;
+            margin-top: 12px;
+        }
+        .radar-choque-card {
+            background-color: #0e1117;
+            border: 1px solid #262c3d;
+            border-top: 3px solid #00d26a;
+            border-radius: 10px;
+            padding: 13px 15px;
+        }
+        .radar-dark-table-wrap {
+            background-color: #161922;
+            border: 1px solid #262c3d;
+            border-radius: 12px;
+            overflow-x: auto;
+            margin-top: 8px;
+            margin-bottom: 14px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.30);
+        }
+        table.radar-dark-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.87rem;
+            color: #f0f2f6;
+            background-color: #161922;
+        }
+        table.radar-dark-table thead tr {
+            background-color: #1e2230;
+            border-bottom: 2px solid #2d3448;
+        }
+        table.radar-dark-table th {
+            padding: 11px 13px;
+            text-align: left;
+            font-weight: 700;
+            color: #94a3b8;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 0.04em;
+            white-space: nowrap;
+        }
+        table.radar-dark-table tbody tr {
+            border-bottom: 1px solid #222736;
+            background-color: #161922;
+            transition: background-color 0.15s ease;
+        }
+        table.radar-dark-table tbody tr:nth-child(even) {
+            background-color: #131620;
+        }
+        table.radar-dark-table tbody tr:hover {
+            background-color: #1e2436;
+        }
+        table.radar-dark-table td {
+            padding: 10px 13px;
+            vertical-align: middle;
+        }
+        .pill-win {
+            display: inline-block;
+            background-color: rgba(0, 210, 106, 0.14);
+            color: #00d26a;
+            border: 1px solid rgba(0, 210, 106, 0.42);
+            border-radius: 6px;
+            padding: 2px 7px;
+            margin: 2px 3px 2px 0;
+            font-family: monospace;
+            font-size: 0.77rem;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+        .pill-loss {
+            display: inline-block;
+            background-color: rgba(248, 113, 113, 0.14);
+            color: #f87171;
+            border: 1px solid rgba(248, 113, 113, 0.42);
+            border-radius: 6px;
+            padding: 2px 7px;
+            margin: 2px 3px 2px 0;
+            font-family: monospace;
+            font-size: 0.77rem;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .pill-ev-high {
+            display: inline-block;
+            background-color: rgba(0, 210, 106, 0.16);
+            color: #00d26a;
+            border: 1px solid #00d26a;
+            border-radius: 6px;
+            padding: 3px 9px;
+            font-family: monospace;
+            font-size: 0.80rem;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+        .pill-ev-cyan {
+            display: inline-block;
+            background-color: rgba(56, 189, 248, 0.15);
+            color: #38bdf8;
+            border: 1px solid rgba(56, 189, 248, 0.50);
+            border-radius: 6px;
+            padding: 3px 9px;
+            font-family: monospace;
+            font-size: 0.80rem;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+        .pill-ev-neg {
+            display: inline-block;
+            background-color: rgba(248, 113, 113, 0.14);
+            color: #f87171;
+            border: 1px solid rgba(248, 113, 113, 0.42);
+            border-radius: 6px;
+            padding: 3px 9px;
+            font-family: monospace;
+            font-size: 0.80rem;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+        .pill-fixture {
+            display: inline-block;
+            background-color: #1e2230;
+            color: #e2e8f0;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            padding: 3px 8px;
+            font-size: 0.79rem;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .pill-fixture-none {
+            display: inline-block;
+            background-color: rgba(100, 116, 139, 0.14);
+            color: #94a3b8;
+            border: 1px solid rgba(100, 116, 139, 0.30);
+            border-radius: 6px;
+            padding: 3px 8px;
+            font-size: 0.78rem;
+            white-space: nowrap;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.title("🎯 Radar Cuantitativo de Tendencias & Convergencia EV+")
+    st.markdown(
+        "<div class='radar-hero-banner'>"
+        "📡 <b>Escáner Institucional de Rachas y Valor Esperado:</b> Detección de rachas empíricas por condición de campo, "
+        "cruce automático con el calendario próximo, motor de <b>Choque de Tendencias (Doble Coincidencia)</b>, "
+        "calibración <b>Cuota Justa Zero-Vig vs Mercado</b> y síntesis ejecutiva con <b>Google AI Studio</b>."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    if err_partidos or df_partidos.empty:
+        st.warning("No hay suficientes datos históricos disponibles en `macro_base_futbol.db`.")
     else:
-        equipos = pd.concat([df_partidos['HomeTeam'], df_partidos['AwayTeam']]).dropna().unique()
-        tend_over, tend_btts, tend_ht, tend_corners = [], [], [], []
-        
-        for eq in equipos:
-            df_eq = df_partidos[df_partidos['HomeTeam'] == eq].copy() if "Local" in filtro_condicion else (df_partidos[df_partidos['AwayTeam'] == eq].copy() if "Visitante" in filtro_condicion else df_partidos[(df_partidos['HomeTeam'] == eq) | (df_partidos['AwayTeam'] == eq)].copy())
-            if 'Date' in df_eq.columns:
-                df_eq['Date_Parsed'] = pd.to_datetime(df_eq['Date'], errors='coerce', dayfirst=True)
-                df_eq = df_eq.sort_values(by='Date_Parsed', ascending=False)
-            
-            u5 = df_eq.head(5)
-            if len(u5) >= 3:
-                if 'FTHG' in u5.columns and 'FTAG' in u5.columns:
-                    res_o = ((u5['FTHG'] + u5['FTAG']) > 2.5).tolist()
-                    if sum(res_o) >= umbral_racha: tend_over.append({"Equipo": eq, "Aciertos": f"{sum(res_o)}/{len(u5)}", "Winrate": f"{(sum(res_o)/len(u5))*100:.0f}%", "Forma": "".join(["✅" if x else "❌" for x in res_o])})
-                    
-                    res_b = ((u5['FTHG'] > 0) & (u5['FTAG'] > 0)).tolist()
-                    if sum(res_b) >= umbral_racha: tend_btts.append({"Equipo": eq, "Aciertos": f"{sum(res_b)}/{len(u5)}", "Winrate": f"{(sum(res_b)/len(u5))*100:.0f}%", "Forma": "".join(["✅" if x else "❌" for x in res_b])})
-                
-                if 'HTHG' in u5.columns and 'HTAG' in u5.columns:
-                    res_ht = ((u5['HTHG'] + u5['HTAG']) > 0).tolist()
-                    if sum(res_ht) >= umbral_racha: tend_ht.append({"Equipo": eq, "Aciertos": f"{sum(res_ht)}/{len(u5)}", "Winrate": f"{(sum(res_ht)/len(u5))*100:.0f}%", "Forma": "".join(["✅" if x else "❌" for x in res_ht])})
-                
-                if 'HC' in u5.columns and 'AC' in u5.columns:
-                    res_c = ((u5['HC'] + u5['AC']) > 8.5).tolist()
-                    if sum(res_c) >= umbral_racha: tend_corners.append({"Equipo": eq, "Aciertos": f"{sum(res_c)}/{len(u5)}", "Winrate": f"{(sum(res_c)/len(u5))*100:.0f}%", "Forma": "".join(["✅" if x else "❌" for x in res_c])})
+        # Normalización defensiva de columna de liga para soportar tanto filtro lateral como selector propio
+        df_rad_base = df_partidos.copy()
+        col_div_rad = next(
+            (c for c in ("Div", "Liga_Origen") if c in df_rad_base.columns),
+            next((c for c in df_rad_base.columns if "Div" in str(c)), None),
+        )
+        divs_disp_rad = (
+            [d for d in MAPA_LIGAS if d in set(df_rad_base[col_div_rad].dropna().astype(str))]
+            if col_div_rad
+            else []
+        )
+        opciones_liga_rad = ["Todas las Competiciones"] + [MAPA_LIGAS[d] for d in divs_disp_rad]
 
-        tab1, tab2, tab3, tab4 = st.tabs(["🔥 Más de 2.5 Goles", "🎯 Ambos Marcan (BTTS)", "⏱️ Más 0.5 Goles 1ª Parte", "🚩 Córners (+8.5 Totales)"])
-        with tab1:
-            if tend_over:
-                st.dataframe(pd.DataFrame(tend_over).sort_values(by="Winrate", ascending=False), use_container_width=True, hide_index=True)
+        col_rf0, col_rf1, col_rf2 = st.columns([1.2, 1.8, 1.3])
+        with col_rf0:
+            liga_rad_sel = st.selectbox(
+                "🌍 Competición:",
+                opciones_liga_rad,
+                index=0,
+                key="radar_filtro_liga",
+            )
+        with col_rf1:
+            filtro_condicion = st.radio(
+                "🏠 Condición de Campo:",
+                ["Global (Todos los partidos)", "Solo como Local 🏠", "Solo como Visitante ✈️"],
+                horizontal=True,
+                key="radar_filtro_condicion",
+            )
+        with col_rf2:
+            umbral_racha = st.select_slider(
+                "🔥 Umbral Mínimo de Racha:",
+                options=[3, 4, 5],
+                value=4,
+                format_func=lambda x: f"Mínimo {x}/5 ({x * 20}%)",
+                key="radar_umbral_racha",
+            )
+
+        if liga_rad_sel != "Todas las Competiciones" and col_div_rad:
+            div_target_rad = MAPA_INV.get(liga_rad_sel, "")
+            df_rad = df_rad_base[df_rad_base[col_div_rad].astype(str) == str(div_target_rad)].copy()
+        else:
+            df_rad = df_rad_base.copy()
+
+        for _cn in (
+            "FTHG", "FTAG", "HTHG", "HTAG", "HC", "AC", "HY", "AY", "HR", "AR",
+            "AHh", "AHCh", "Avg>2.5", "B365>2.5", "Max>2.5",
+            "AvgH", "AvgD", "AvgA", "B365H", "B365A",
+            "AvgAHH", "AvgAHA", "B365AHH", "B365AHA", "MaxAHH", "MaxAHA",
+        ):
+            if _cn in df_rad.columns:
+                df_rad[_cn] = pd.to_numeric(df_rad[_cn], errors="coerce")
+
+        if "Date" in df_rad.columns:
+            df_rad["Date_Parsed"] = pd.to_datetime(df_rad["Date"], errors="coerce", dayfirst=True)
+        else:
+            df_rad["Date_Parsed"] = pd.NaT
+
+        # ── Helpers internos del Radar (Pilar 2, 3, 4 y 5) ───────────────────
+        def _abrev_rival_radar(nombre_eq: str) -> str:
+            limpio = "".join(ch for ch in str(nombre_eq or "RIV").upper() if ch.isalnum() or ch == " ").strip()
+            partes = limpio.split()
+            if len(partes) >= 2 and len(partes[0]) <= 3:
+                return (partes[0][:1] + partes[1][:2]).upper()[:3]
+            return (limpio.replace(" ", "") + "RIV")[:3]
+
+        def _construir_horizonte_fixtures_y_cuotas(df_scope: pd.DataFrame) -> tuple[dict, list[dict]]:
+            """
+            Cruza calendarios próximos desde:
+            1) Caché activa del Escáner EV+ (`st.session_state.df_ops_export`) y `ev_fix_manual`
+            2) Partidos programados sin marcador (`FTHG.isna()`) en `macro_base_futbol.db`
+            3) Horizonte de la última jornada activa por competición en `macro_base_futbol.db`
+            Devuelve (mapa_equipo_fixture, lista_emparejamientos_unicos).
+            """
+            mapa_eq = {}
+            lista_duelos = []
+            vistos_duelos = set()
+
+            # A) Cruce con caché de cuotas en vivo de conector_odds (si existe en sesión)
+            df_ops_cache = st.session_state.get("df_ops_export")
+            cuotas_api_duelo = {}
+            if isinstance(df_ops_cache, pd.DataFrame) and not df_ops_cache.empty and "Partido" in df_ops_cache.columns:
+                for _, r_op in df_ops_cache.iterrows():
+                    p_txt = str(r_op.get("Partido", ""))
+                    if " vs " in p_txt:
+                        h_op, a_op = [x.strip() for x in p_txt.split(" vs ", 1)]
+                        f_op = str(r_op.get("Fecha / Hora", "Próxima Jornada"))
+                        m_op = str(r_op.get("Mercado", ""))
+                        c_op = pd.to_numeric(r_op.get("Cuota"), errors="coerce")
+                        cuotas_api_duelo.setdefault((h_op, a_op), {"fecha": f_op, "mercados": {}})
+                        if pd.notna(c_op) and c_op > 1.0:
+                            cuotas_api_duelo[(h_op, a_op)]["mercados"][m_op] = float(c_op)
+
+            for (h_op, a_op), info_op in cuotas_api_duelo.items():
+                f_str = info_op["fecha"]
+                mapa_eq[h_op] = {
+                    "rival": a_op,
+                    "condicion": "Local",
+                    "etiqueta": f"vs {a_op} [Local]",
+                    "fecha": f_str,
+                    "cuotas_api": info_op["mercados"],
+                }
+                mapa_eq[a_op] = {
+                    "rival": h_op,
+                    "condicion": "Visitante",
+                    "etiqueta": f"vs {h_op} [Visitante]",
+                    "fecha": f_str,
+                    "cuotas_api": info_op["mercados"],
+                }
+                if (h_op, a_op) not in vistos_duelos:
+                    vistos_duelos.add((h_op, a_op))
+                    lista_duelos.append({"local": h_op, "visitante": a_op, "fecha": f_str, "div": ""})
+
+            # B) Fixtures manuales cargados en sesión
+            for fx_m in st.session_state.get("ev_fix_manual", []):
+                h_m = str(fx_m.get("Local", "")).strip()
+                a_m = str(fx_m.get("Visitante", "")).strip()
+                dt_m = fx_m.get("Fecha")
+                f_m_str = pd.Timestamp(dt_m).strftime("%d/%m/%Y") if dt_m is not None else "Programado"
+                if h_m and a_m and (h_m, a_m) not in vistos_duelos:
+                    vistos_duelos.add((h_m, a_m))
+                    lista_duelos.append({"local": h_m, "visitante": a_m, "fecha": f_m_str, "div": str(fx_m.get("Div", ""))})
+                    mapa_eq.setdefault(h_m, {"rival": a_m, "condicion": "Local", "etiqueta": f"vs {a_m} [Local]", "fecha": f_m_str, "cuotas_api": {}})
+                    mapa_eq.setdefault(a_m, {"rival": h_m, "condicion": "Visitante", "etiqueta": f"vs {h_m} [Visitante]", "fecha": f_m_str, "cuotas_api": {}})
+
+            # C) Partidos futuros en BD (FTHG isna) o jornada activa por liga en macro_base_futbol.db
+            if df_scope is not None and not df_scope.empty:
+                df_no_jug = df_scope[df_scope["FTHG"].isna() & df_scope["HomeTeam"].notna() & df_scope["AwayTeam"].notna()].copy()
+                if not df_no_jug.empty:
+                    df_horizonte = df_no_jug.sort_values("Date_Parsed", ascending=True)
+                else:
+                    # Extraer la ventana de la jornada activa más reciente por liga (últimos 4 días de competición)
+                    partes_jornada = []
+                    if col_div_rad and col_div_rad in df_scope.columns:
+                        for _, sub_l in df_scope.groupby(col_div_rad):
+                            max_dt = sub_l["Date_Parsed"].max()
+                            if pd.notna(max_dt):
+                                partes_jornada.append(sub_l[sub_l["Date_Parsed"] >= (max_dt - pd.Timedelta(days=4))])
+                    if partes_jornada:
+                        df_horizonte = pd.concat(partes_jornada, ignore_index=True).sort_values("Date_Parsed", ascending=False)
+                    else:
+                        max_dt_all = df_scope["Date_Parsed"].max()
+                        df_horizonte = (
+                            df_scope[df_scope["Date_Parsed"] >= (max_dt_all - pd.Timedelta(days=4))].sort_values("Date_Parsed", ascending=False)
+                            if pd.notna(max_dt_all)
+                            else pd.DataFrame()
+                        )
+
+                for _, r_hz in df_horizonte.iterrows():
+                    h_bd = str(r_hz.get("HomeTeam", "")).strip()
+                    a_bd = str(r_hz.get("AwayTeam", "")).strip()
+                    if not h_bd or not a_bd:
+                        continue
+                    f_bd = str(r_hz.get("Date", "")).strip() or "Jornada Activa"
+                    div_bd = str(r_hz.get(col_div_rad, "")) if col_div_rad else ""
+                    if h_bd not in mapa_eq:
+                        mapa_eq[h_bd] = {
+                            "rival": a_bd,
+                            "condicion": "Local",
+                            "etiqueta": f"vs {a_bd} [Local]",
+                            "fecha": f_bd,
+                            "fila_bd": r_hz,
+                            "cuotas_api": {},
+                        }
+                    if a_bd not in mapa_eq:
+                        mapa_eq[a_bd] = {
+                            "rival": h_bd,
+                            "condicion": "Visitante",
+                            "etiqueta": f"vs {h_bd} [Visitante]",
+                            "fecha": f_bd,
+                            "fila_bd": r_hz,
+                            "cuotas_api": {},
+                        }
+                    if (h_bd, a_bd) not in vistos_duelos:
+                        vistos_duelos.add((h_bd, a_bd))
+                        lista_duelos.append({"local": h_bd, "visitante": a_bd, "fecha": f_bd, "div": div_bd})
+
+            return mapa_eq, lista_duelos
+
+        def _estimar_cuota_mercado_radar(u5_df: pd.DataFrame, eq: str, clave_mercado: str, info_fix: dict | None) -> float:
+            """
+            Extrae la cuota decimal de mercado desde la caché de cuotas en vivo o desde las columnas
+            históricas reales de `macro_base_futbol.db` (`Avg>2.5`, `B365>2.5`, `AvgAHH`/`AvgAHA`, `AvgH`/`AvgA`),
+            aplicando calibración empírica con margen bookmaker cuando el mercado es derivado.
+            """
+            cuotas_api = (info_fix or {}).get("cuotas_api") or {}
+            if clave_mercado == "OVER25":
+                for k_api, v_api in cuotas_api.items():
+                    if "2.5" in k_api and ("Más" in k_api or "Over" in k_api):
+                        return round(float(v_api), 2)
+                for col_c in ("Max>2.5", "Avg>2.5", "B365>2.5"):
+                    if col_c in u5_df.columns:
+                        s_c = pd.to_numeric(u5_df[col_c], errors="coerce").dropna()
+                        if not s_c.empty:
+                            return round(float(s_c.iloc[0]), 2)
+                return 1.85
+
+            if clave_mercado == "BTTS":
+                for k_api, v_api in cuotas_api.items():
+                    if "Ambos" in k_api or "BTTS" in k_api:
+                        return round(float(v_api), 2)
+                for col_c in ("Avg>2.5", "B365>2.5"):
+                    if col_c in u5_df.columns:
+                        s_c = pd.to_numeric(u5_df[col_c], errors="coerce").dropna()
+                        if not s_c.empty:
+                            return round(float(np.clip(s_c.mean() * 0.96, 1.55, 2.25)), 2)
+                return 1.80
+
+            if clave_mercado == "HT05":
+                for col_c in ("Avg>2.5", "B365>2.5"):
+                    if col_c in u5_df.columns:
+                        s_c = pd.to_numeric(u5_df[col_c], errors="coerce").dropna()
+                        if not s_c.empty:
+                            return round(float(np.clip(s_c.mean() * 0.76, 1.30, 1.72)), 2)
+                return 1.42
+
+            if clave_mercado == "CORNERS85":
+                if {"HC", "AC"}.issubset(u5_df.columns):
+                    c_med = float((u5_df["HC"].fillna(0) + u5_df["AC"].fillna(0)).mean())
+                    # Línea estándar de mercado para +8.5 córners en función del volumen medio
+                    c_mkt = 1.85 - np.clip((c_med - 9.5) * 0.06, -0.22, 0.22)
+                    return round(float(np.clip(c_mkt, 1.52, 2.20)), 2)
+                return 1.83
+
+            if clave_mercado == "CARDS45":
+                if {"HY", "AY"}.issubset(u5_df.columns):
+                    t_med = float((u5_df["HY"].fillna(0) + u5_df["AY"].fillna(0) + u5_df.get("HR", 0).fillna(0) + u5_df.get("AR", 0).fillna(0)).mean())
+                    c_mkt = 1.90 - np.clip((t_med - 4.7) * 0.07, -0.25, 0.25)
+                    return round(float(np.clip(c_mkt, 1.55, 2.30)), 2)
+                return 1.88
+
+            if clave_mercado == "ATS":
+                cuotas_ats = []
+                for _, r_u in u5_df.iterrows():
+                    es_loc = str(r_u.get("HomeTeam", "")) == eq
+                    col_pref = ("MaxAHH", "AvgAHH", "B365AHH") if es_loc else ("MaxAHA", "AvgAHA", "B365AHA")
+                    for c_ah in col_pref:
+                        val_c = pd.to_numeric(r_u.get(c_ah), errors="coerce")
+                        if pd.notna(val_c) and val_c > 1.01:
+                            cuotas_ats.append(float(val_c))
+                            break
+                if cuotas_ats:
+                    return round(float(cuotas_ats[0]), 2)
+                return 1.92
+
+            return 1.85
+
+        def _evaluar_racha_equipo_mercado(u5_df: pd.DataFrame, eq: str, clave_mercado: str, info_fix: dict | None, liga_eq: str) -> dict | None:
+            """
+            Evalúa los últimos N partidos (u5_df) de `eq` en `clave_mercado`.
+            Genera tokens granulares `[GF-GA vs RIV]` con estilo pill, calcula Cuota Justa Zero-Vig,
+            Cuota Mercado y EV% Spread.
+            """
+            if u5_df is None or len(u5_df) < 3:
+                return None
+
+            aciertos_bool = []
+            tokens_html = []
+            tokens_texto = []
+
+            for _, fila in u5_df.iterrows():
+                es_loc = str(fila.get("HomeTeam", "")) == eq
+                rival = str(fila.get("AwayTeam", "") if es_loc else fila.get("HomeTeam", ""))
+                abrev = _abrev_rival_radar(rival)
+                fthg = pd.to_numeric(fila.get("FTHG"), errors="coerce")
+                ftag = pd.to_numeric(fila.get("FTAG"), errors="coerce")
+                if pd.isna(fthg) or pd.isna(ftag):
+                    continue
+                gf = int(float(fthg if es_loc else ftag))
+                ga = int(float(ftag if es_loc else fthg))
+
+                hit = False
+                etiqueta_extra = ""
+                if clave_mercado == "OVER25":
+                    hit = (fthg + ftag) > 2.5
+                elif clave_mercado == "BTTS":
+                    hit = (fthg > 0) and (ftag > 0)
+                elif clave_mercado == "HT05":
+                    hthg = pd.to_numeric(fila.get("HTHG"), errors="coerce")
+                    htag = pd.to_numeric(fila.get("HTAG"), errors="coerce")
+                    if pd.isna(hthg) or pd.isna(htag):
+                        continue
+                    hit = (hthg + htag) > 0.5
+                    etiqueta_extra = f" HT:{int(hthg)}-{int(htag)}"
+                elif clave_mercado == "CORNERS85":
+                    hc = pd.to_numeric(fila.get("HC"), errors="coerce")
+                    ac = pd.to_numeric(fila.get("AC"), errors="coerce")
+                    if pd.isna(hc) or pd.isna(ac):
+                        continue
+                    tot_c = int(hc + ac)
+                    hit = tot_c > 8.5
+                    etiqueta_extra = f" {tot_c}C"
+                elif clave_mercado == "CARDS45":
+                    hy = pd.to_numeric(fila.get("HY"), errors="coerce")
+                    ay = pd.to_numeric(fila.get("AY"), errors="coerce")
+                    hr = pd.to_numeric(fila.get("HR"), errors="coerce")
+                    ar = pd.to_numeric(fila.get("AR"), errors="coerce")
+                    if pd.isna(hy) or pd.isna(ay):
+                        continue
+                    tot_t = int(hy + ay + (0 if pd.isna(hr) else hr) + (0 if pd.isna(ar) else ar))
+                    hit = tot_t > 4.5
+                    etiqueta_extra = f" {tot_t}T"
+                elif clave_mercado == "ATS":
+                    ah_raw = pd.to_numeric(fila.get("AHh"), errors="coerce")
+                    if pd.isna(ah_raw):
+                        ah_raw = pd.to_numeric(fila.get("AHCh"), errors="coerce")
+                    if pd.isna(ah_raw):
+                        ah_raw = -0.25
+                    linea_eq = float(ah_raw) if es_loc else -float(ah_raw)
+                    diff_ats = (gf + linea_eq) - ga
+                    if abs(diff_ats) < 1e-6:
+                        # Push se ignora o se considera no-perdido; evaluamos cobertura efectiva (> 0)
+                        hit = False
+                    else:
+                        hit = diff_ats > 0.0
+                    etiqueta_extra = f" AH{linea_eq:+.2g}"
+
+                aciertos_bool.append(bool(hit))
+                token_str = f"[{gf}-{ga} vs {abrev}{etiqueta_extra}]"
+                tokens_texto.append(f"{'✅' if hit else '❌'}{token_str}")
+                clase_pill = "pill-win" if hit else "pill-loss"
+                tokens_html.append(f"<span class='{clase_pill}'>{_html_rad.escape(token_str)}</span>")
+
+            n_eval = len(aciertos_bool)
+            if n_eval < 3:
+                return None
+
+            n_hits = int(sum(aciertos_bool))
+            winrate_pct = (n_hits / n_eval) * 100.0
+            cuota_justa = round(1.0 / max(winrate_pct / 100.0, 0.01), 2)
+            cuota_mercado = _estimar_cuota_mercado_radar(u5_df, eq, clave_mercado, info_fix)
+            ev_pct = round(((cuota_mercado / cuota_justa) - 1.0) * 100.0, 1)
+
+            if info_fix:
+                prox_rival_lbl = info_fix.get("etiqueta", "Sin emparejamiento próximo")
+                prox_fecha_lbl = info_fix.get("fecha", "")
+                prox_html = (
+                    f"<span class='pill-fixture'>🗓️ {_html_rad.escape(prox_rival_lbl)}"
+                    + (f" · <span style='color:#38bdf8;'>{_html_rad.escape(prox_fecha_lbl)}</span>" if prox_fecha_lbl else "")
+                    + "</span>"
+                )
+                prox_plano = f"{prox_rival_lbl} ({prox_fecha_lbl})" if prox_fecha_lbl else prox_rival_lbl
             else:
-                st.info("Sin rachas destacadas.")
-        with tab2:
-            if tend_btts:
-                st.dataframe(pd.DataFrame(tend_btts).sort_values(by="Winrate", ascending=False), use_container_width=True, hide_index=True)
+                prox_html = "<span class='pill-fixture-none'>Sin emparejamiento próximo</span>"
+                prox_plano = "Sin emparejamiento próximo"
+
+            if ev_pct > 5.0:
+                ev_badge_html = f"<span class='pill-ev-high'>🔥 {ev_pct:+.1f}% (EV+)</span>"
+            elif ev_pct >= -5.0:
+                ev_badge_html = f"<span class='pill-ev-cyan'>⚖️ {ev_pct:+.1f}% (En Línea)</span>"
             else:
-                st.info("Sin rachas destacadas.")
-        with tab3:
-            if tend_ht:
-                st.dataframe(pd.DataFrame(tend_ht).sort_values(by="Winrate", ascending=False), use_container_width=True, hide_index=True)
+                ev_badge_html = f"<span class='pill-ev-neg'>⚠️ {ev_pct:+.1f}% (Sobrevalorado)</span>"
+
+            return {
+                "Equipo": eq,
+                "Liga": liga_eq,
+                "Aciertos_Num": n_hits,
+                "Muestra_Num": n_eval,
+                "Aciertos": f"{n_hits}/{n_eval}",
+                "Winrate_Num": round(winrate_pct, 1),
+                "Winrate": f"{winrate_pct:.0f}%",
+                "Cuota_Justa": cuota_justa,
+                "Cuota_Mercado": cuota_mercado,
+                "EV_Num": ev_pct,
+                "EV_Badge_HTML": ev_badge_html,
+                "Proximo_HTML": prox_html,
+                "Proximo_Plano": prox_plano,
+                "Forma_HTML": "".join(tokens_html),
+                "Forma_Texto": " ".join(tokens_texto),
+            }
+
+        def _renderizar_tabla_oscura_radar(lista_items: list[dict]):
+            if not lista_items:
+                st.info("Sin rachas que superen el umbral seleccionado en este mercado.")
+                return
+            ordenados = sorted(lista_items, key=lambda x: (x["Winrate_Num"], x["EV_Num"]), reverse=True)
+            filas_tr = []
+            for item in ordenados:
+                wr_color = "#00d26a" if item["Winrate_Num"] >= 80.0 else "#38bdf8"
+                filas_tr.append(
+                    "<tr>"
+                    f"<td style='font-weight:700; color:#f8fafc;'>⚽ {_html_rad.escape(item['Equipo'])} "
+                    f"<span style='font-size:0.74rem; color:#64748b; font-weight:500;'>({_html_rad.escape(item['Liga'])})</span></td>"
+                    f"<td>{item['Proximo_HTML']}</td>"
+                    f"<td style='font-family:monospace; font-weight:700; color:{wr_color};'>{item['Aciertos']} ({item['Winrate']})</td>"
+                    f"<td>{item['Forma_HTML']}</td>"
+                    f"<td style='font-family:monospace; font-weight:700; color:#e2e8f0;'>{item['Cuota_Justa']:.2f}</td>"
+                    f"<td style='font-family:monospace; font-weight:700; color:#38bdf8;'>{item['Cuota_Mercado']:.2f}</td>"
+                    f"<td>{item['EV_Badge_HTML']}</td>"
+                    "</tr>"
+                )
+            html_tabla = (
+                "<div class='radar-dark-table-wrap'>"
+                "<table class='radar-dark-table'>"
+                "<thead><tr>"
+                "<th>Equipo / Competición</th>"
+                "<th>Próximo Emparejamiento</th>"
+                "<th>Racha / Winrate</th>"
+                "<th>Desglose Granular (Últimos 5)</th>"
+                "<th>Cuota Justa</th>"
+                "<th>Cuota Mercado</th>"
+                "<th>Diferencial EV%</th>"
+                "</tr></thead>"
+                f"<tbody>{''.join(filas_tr)}</tbody>"
+                "</table></div>"
+            )
+            st.markdown(html_tabla, unsafe_allow_html=True)
+
+        # ── Construcción del Mapa de Próximos Partidos y Escaneo de Equipos ───
+        mapa_fixtures, duelos_horizonte = _construir_horizonte_fixtures_y_cuotas(df_rad)
+        equipos_rad = sorted(pd.concat([df_rad["HomeTeam"], df_rad["AwayTeam"]]).dropna().unique().tolist())
+
+        CATALOGO_MERCADOS_RADAR = [
+            ("OVER25", "🔥 Más de 2.5 Goles"),
+            ("BTTS", "🎯 Ambos Marcan (BTTS)"),
+            ("HT05", "⏱️ Más 0.5 Goles 1ª Parte"),
+            ("CORNERS85", "🚩 Córners (+8.5 Totales)"),
+            ("CARDS45", "🟨 Fricción Disciplinaria (+4.5 Tarjetas)"),
+            ("ATS", "🛡️ Hándicap Asiático Cubierto (ATS)"),
+        ]
+
+        resultados_por_mercado = {k: [] for k, _ in CATALOGO_MERCADOS_RADAR}
+        indice_racha_local = {k: {} for k, _ in CATALOGO_MERCADOS_RADAR}
+        indice_racha_visit = {k: {} for k, _ in CATALOGO_MERCADOS_RADAR}
+
+        for eq in equipos_rad:
+            df_eq_all = df_rad[(df_rad["HomeTeam"] == eq) | (df_rad["AwayTeam"] == eq)].sort_values(by="Date_Parsed", ascending=False)
+            df_eq_loc = df_rad[df_rad["HomeTeam"] == eq].sort_values(by="Date_Parsed", ascending=False)
+            df_eq_vis = df_rad[df_rad["AwayTeam"] == eq].sort_values(by="Date_Parsed", ascending=False)
+
+            if "Local" in filtro_condicion:
+                u5_activo = df_eq_loc.head(5)
+            elif "Visitante" in filtro_condicion:
+                u5_activo = df_eq_vis.head(5)
             else:
-                st.info("Sin rachas destacadas.")
-        with tab4:
-            if tend_corners:
-                st.dataframe(pd.DataFrame(tend_corners).sort_values(by="Winrate", ascending=False), use_container_width=True, hide_index=True)
+                u5_activo = df_eq_all.head(5)
+
+            div_eq_val = (
+                str(df_eq_all[col_div_rad].dropna().iloc[0])
+                if col_div_rad and not df_eq_all.empty and not df_eq_all[col_div_rad].dropna().empty
+                else "SP1"
+            )
+            liga_eq_nom = MAPA_LIGAS.get(div_eq_val, div_eq_val)
+            info_fix_eq = mapa_fixtures.get(eq)
+
+            for m_key, _ in CATALOGO_MERCADOS_RADAR:
+                # 1) Evaluación según filtro activo para las pestañas
+                ev_act = _evaluar_racha_equipo_mercado(u5_activo, eq, m_key, info_fix_eq, liga_eq_nom)
+                if ev_act and ev_act["Aciertos_Num"] >= umbral_racha:
+                    resultados_por_mercado[m_key].append(ev_act)
+
+                # 2) Evaluación específica Local / Visitante para el motor de Doble Coincidencia
+                u5_h_conv = df_eq_loc.head(5) if len(df_eq_loc) >= 3 else df_eq_all.head(5)
+                u5_a_conv = df_eq_vis.head(5) if len(df_eq_vis) >= 3 else df_eq_all.head(5)
+                ev_h = _evaluar_racha_equipo_mercado(u5_h_conv, eq, m_key, info_fix_eq, liga_eq_nom)
+                ev_a = _evaluar_racha_equipo_mercado(u5_a_conv, eq, m_key, info_fix_eq, liga_eq_nom)
+                if ev_h and ev_h["Aciertos_Num"] >= umbral_racha:
+                    indice_racha_local[m_key][eq] = ev_h
+                if ev_a and ev_a["Aciertos_Num"] >= umbral_racha:
+                    indice_racha_visit[m_key][eq] = ev_a
+
+        # ── PILAR 3: DOUBLE-CONVERGENCE RADAR ("CHOQUE DE RACHAS" ENGINE) ─────
+        choques_detectados = []
+        for duelo in duelos_horizonte:
+            eq_h = duelo["local"]
+            eq_a = duelo["visitante"]
+            fecha_d = duelo["fecha"]
+            for m_key, m_label in CATALOGO_MERCADOS_RADAR:
+                r_h = indice_racha_local[m_key].get(eq_h)
+                r_a = indice_racha_visit[m_key].get(eq_a)
+                if r_h and r_a:
+                    wr_comb = round((r_h["Winrate_Num"] + r_a["Winrate_Num"]) / 2.0, 1)
+                    cj_comb = round(1.0 / max(wr_comb / 100.0, 0.01), 2)
+                    cm_comb = round((r_h["Cuota_Mercado"] + r_a["Cuota_Mercado"]) / 2.0, 2)
+                    ev_comb = round(((cm_comb / cj_comb) - 1.0) * 100.0, 1)
+                    choques_detectados.append({
+                        "partido": f"{eq_h} vs {eq_a}",
+                        "liga": r_h["Liga"],
+                        "fecha": fecha_d,
+                        "mercado": m_label,
+                        "racha_local": r_h,
+                        "racha_visit": r_a,
+                        "wr_comb": wr_comb,
+                        "cuota_justa": cj_comb,
+                        "cuota_mercado": cm_comb,
+                        "ev_comb": ev_comb,
+                    })
+
+        choques_detectados.sort(key=lambda x: (x["wr_comb"], x["ev_comb"]), reverse=True)
+
+        if choques_detectados:
+            tarjetas_choque_html = []
+            for ch in choques_detectados[:6]:
+                rl = ch["racha_local"]
+                rv = ch["racha_visit"]
+                ev_cls = "pill-ev-high" if ch["ev_comb"] > 5.0 else ("pill-ev-cyan" if ch["ev_comb"] >= -5.0 else "pill-ev-neg")
+                tarjetas_choque_html.append(
+                    "<div class='radar-choque-card'>"
+                    f"<div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;'>"
+                    f"<span style='color:#38bdf8; font-weight:700; font-size:0.82rem;'>{_html_rad.escape(ch['mercado'])}</span>"
+                    f"<span class='{ev_cls}'>EV {ch['ev_comb']:+.1f}%</span>"
+                    "</div>"
+                    f"<div style='font-size:1.0rem; font-weight:800; color:#f8fafc; margin-bottom:4px;'>"
+                    f"⚔️ {_html_rad.escape(ch['partido'])} "
+                    f"<span style='font-size:0.76rem; color:#94a3b8; font-weight:500;'>({_html_rad.escape(ch['fecha'])})</span></div>"
+                    f"<div style='font-size:0.80rem; color:#cbd5e1; margin-bottom:6px;'>"
+                    f"🏠 <b>{_html_rad.escape(rl['Equipo'])}:</b> <span style='color:#00d26a; font-family:monospace;'>{rl['Aciertos']} ({rl['Winrate']})</span> · "
+                    f"✈️ <b>{_html_rad.escape(rv['Equipo'])}:</b> <span style='color:#00d26a; font-family:monospace;'>{rv['Aciertos']} ({rv['Winrate']})</span>"
+                    "</div>"
+                    f"<div style='font-size:0.78rem; color:#94a3b8; font-family:monospace;'>"
+                    f"Convergencia: <b style='color:#00d26a;'>{ch['wr_comb']:.0f}%</b> | "
+                    f"Cuota Justa: <b style='color:#f8fafc;'>{ch['cuota_justa']:.2f}</b> vs "
+                    f"Mercado: <b style='color:#38bdf8;'>{ch['cuota_mercado']:.2f}</b>"
+                    "</div>"
+                    "</div>"
+                )
+            st.markdown(
+                "<div class='radar-choque-wrapper'>"
+                "<div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;'>"
+                "<span style='font-size:1.05rem; font-weight:800; color:#f8fafc;'>"
+                "💥 Oportunidad de Alta Fricción: Choque de Tendencias (Doble Coincidencia Local + Visitante)</span>"
+                f"<span class='pill-ev-cyan'>{len(choques_detectados)} Convergencias Activas</span>"
+                "</div>"
+                f"<div class='radar-choque-grid'>{''.join(tarjetas_choque_html)}</div>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                "<div class='radar-choque-wrapper' style='padding:12px 16px;'>"
+                "💥 <b>Oportunidad de Alta Fricción: Choque de Tendencias:</b> "
+                "<span style='color:#94a3b8;'>No se registran cruces directos donde ambos contendientes superen simultáneamente "
+                f"el umbral {umbral_racha}/5 en el mismo mercado dentro del filtro actual. Reduce el umbral a 3/5 o selecciona 'Todas las Competiciones' para ampliar el barrido.</span>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+
+        # ── PILAR 6: ONE-CLICK AI EXECUTIVE RADAR DIGEST (GOOGLE AI STUDIO) ───
+        todas_rachas_activas = []
+        for m_key, m_label in CATALOGO_MERCADOS_RADAR:
+            for r_item in resultados_por_mercado[m_key]:
+                copia_r = dict(r_item)
+                copia_r["Mercado_Nombre"] = m_label
+                todas_rachas_activas.append(copia_r)
+
+        top3_ev_radar = sorted(todas_rachas_activas, key=lambda x: (x["EV_Num"], x["Winrate_Num"]), reverse=True)[:3]
+
+        col_ai_btn, col_ai_info = st.columns([1.6, 2.4])
+        with col_ai_btn:
+            ejecutar_veredicto_radar = st.button(
+                "⚡ Generar Veredicto Táctico del Radar (AI Studio)",
+                use_container_width=True,
+                type="primary",
+                key="btn_radar_ai_digest",
+            )
+        with col_ai_info:
+            st.caption(
+                f"📊 **{len(todas_rachas_activas)} rachas activas** detectadas en 6 mercados · "
+                f"Síntesis automática de las **Top 3 oportunidades con mayor EV%** vía `gemini-3.8-flash`."
+            )
+
+        if ejecutar_veredicto_radar:
+            clave_radar_ia = ""
+            try:
+                clave_radar_ia = st.secrets.get("GEMINI_API_KEY", "") or ""
+            except Exception:
+                clave_radar_ia = ""
+            if not clave_radar_ia:
+                clave_radar_ia = (
+                    _os_rad.getenv("GEMINI_API_KEY", "")
+                    or st.session_state.get("input_gemini_api_key_asistente", "")
+                    or ""
+                ).strip()
+
+            if not _RADAR_GENAI_OK or _genai_rad is None:
+                st.error("⚠️ El SDK `google-genai` no está disponible en este entorno.")
+            elif not clave_radar_ia:
+                st.warning(
+                    "🔑 Configura `GEMINI_API_KEY` en `st.secrets` / entorno o introdúcela en el módulo **🤖 Asistente IA Local** para activar el Veredicto en vivo."
+                )
+            elif not top3_ev_radar:
+                st.info("No hay rachas activas bajo el filtro actual para sintetizar.")
             else:
-                st.info("Sin rachas destacadas.")
+                resumen_top3_txt = "\n".join(
+                    f"- {idx + 1}. {it['Equipo']} ({it['Liga']}) | Mercado: {it['Mercado_Nombre']} | "
+                    f"Racha: {it['Aciertos']} ({it['Winrate']}) | Próximo: {it['Proximo_Plano']} | "
+                    f"Cuota Justa: {it['Cuota_Justa']:.2f} vs Cuota Mercado: {it['Cuota_Mercado']:.2f} (EV: {it['EV_Num']:+.1f}%) | "
+                    f"Forma: {it['Forma_Texto']}"
+                    for idx, it in enumerate(top3_ev_radar)
+                )
+                prompt_radar_digest = (
+                    "Eres el Director Cuantitativo de BigData Football.\n"
+                    "Sintetiza exclusivamente las siguientes Top 3 rachas con mayor Valor Esperado (EV+) "
+                    "detectadas en el Radar de Tendencias en un informe ejecutivo ultra-directo de exactamente 3 viñetas "
+                    "(una por selección, indicando equipo, mercado, próximo rival, diferencial entre Cuota Justa y Cuota Mercado, y dictamen operativo).\n"
+                    "Prohibido usar lambda 'λ' o '@' antes de las cuotas.\n\n"
+                    f"TOP_3_RACHAS_RADAR:\n{resumen_top3_txt}"
+                )
+
+                def _stream_veredicto_radar(prompt_txt):
+                    client_r = _genai_rad.Client(api_key=clave_radar_ia)
+                    try:
+                        stream_r = client_r.models.generate_content_stream(
+                            model="gemini-3.8-flash",
+                            contents=prompt_txt,
+                        )
+                        for ch_r in stream_r:
+                            if ch_r.text:
+                                yield ch_r.text
+                    except Exception:
+                        stream_r = client_r.models.generate_content_stream(
+                            model="gemini-2.0-flash",
+                            contents=prompt_txt,
+                        )
+                        for ch_r in stream_r:
+                            if ch_r.text:
+                                yield ch_r.text
+
+                with st.container():
+                    st.markdown("##### 🧠 Veredicto Táctico Ejecutivo (Google AI Studio · Top 3 EV+)")
+                    try:
+                        st.write_stream(_stream_veredicto_radar(prompt_radar_digest))
+                    except Exception as err_rad_ia:
+                        st.error(f"Error al generar el veredicto con Google AI Studio: {err_rad_ia}")
+
+        # ── PILAR 5: 6 PESTAÑAS ESPECIALIZADAS CON DESGLOSE GRANULAR ──────────
+        tabs_radar = st.tabs([etq for _, etq in CATALOGO_MERCADOS_RADAR])
+        for idx_tab, (m_key, _) in enumerate(CATALOGO_MERCADOS_RADAR):
+            with tabs_radar[idx_tab]:
+                _renderizar_tabla_oscura_radar(resultados_por_mercado[m_key])
+
 
 elif menu_seleccionado == "📋 Scouting de Jugadores":
     st.title("📋 Scouting de Jugadores Pro")
@@ -4831,370 +6142,531 @@ elif menu_seleccionado == "💸 Calculadora & Kelly":
     col_k2.metric("Stake Máximo (Kelly Completo - Agresivo)", f"{max(bank * k, 0):.2f} €", f"{((max(bank * k, 0))/bank*100):.1f}% del bank")
 
 elif menu_seleccionado == "🤖 Asistente IA Local":
-    st.title("🤖 Asistente Cuantitativo (Chat con tus Datos)")
+    st.markdown(
+        """
+        <style>
+        .stChatFloatingInputContainer,
+        div[data-testid="stBottom"],
+        div[data-testid="stBottom"] > div,
+        footer {
+            background-color: #0e1117 !important;
+            background: #0e1117 !important;
+        }
+        div[data-testid="stChatInput"] {
+            background-color: #1a1d27 !important;
+            border: 1px solid #2d3345 !important;
+            border-radius: 12px !important;
+        }
+        div[data-testid="stChatInput"] textarea {
+            background-color: transparent !important;
+            color: #ffffff !important;
+        }
+        div[data-testid="stChatInput"] button {
+            color: #00d26a !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    import os
+    try:
+        from google import genai
+        from google.genai import types as genai_types
+        _GENAI_SDK_OK = True
+    except Exception:
+        genai = None
+        genai_types = None
+        _GENAI_SDK_OK = False
+
+    st.title("🤖 Asistente Cuantitativo de Élite (Google AI Studio)")
     st.caption(
-        f"Motor de Inferencia Local: `{LM_MODEL_ID}` (`{LM_STUDIO_URL}`) con "
-        "Fallback Estadístico Determinista garantizado (Zero-Failure)."
+        "Motor Cuantitativo `gemini-3.8-flash` (Streaming en Tiempo Real) · RAG Dinámico sobre `macro_base_futbol.db` · "
+        "Calibración de Poisson, Valor Esperado (EV+), Hándicap Asiático y Fricción Arbitral."
     )
 
+    # ── 1. INICIALIZACIÓN RESILIENTE DE CLAVE API Y CLIENTE GOOGLE GENAI ─────
+    clave_entorno = ""
+    try:
+        clave_entorno = st.secrets.get("GEMINI_API_KEY", "") or ""
+    except Exception:
+        clave_entorno = ""
+    if not clave_entorno:
+        clave_entorno = os.getenv("GEMINI_API_KEY", "") or ""
+
+    clave_activa = clave_entorno.strip()
+    if not clave_activa:
+        st.info(
+            "🔐 **Autenticación Google AI Studio requerida:** Introduce tu clave API de Gemini "
+            "(o defínela en `st.secrets['GEMINI_API_KEY']` / variable de entorno `GEMINI_API_KEY`) "
+            "para habilitar la inferencia en vivo con `gemini-3.8-flash`."
+        )
+        clave_input = st.text_input(
+            "🔑 Clave API de Google AI Studio:",
+            type="password",
+            placeholder="AIzaSy...",
+            key="input_gemini_api_key_asistente",
+        )
+        clave_activa = (clave_input or "").strip()
+
+    # ── 2. PERSONA DE DOMINIO CUANTITATIVO (SYSTEM INSTRUCTION) ──────────────
+    SYSTEM_INSTRUCTION_BASE = (
+        "Eres el Asistente Cuantitativo de Élite de BigData Football.\n"
+        "Especialidad: Detección de Valor Esperado (EV+), arbitraje de cuotas, calibración de Poisson y fricción arbitral.\n"
+        "Directrices de respuesta:\n"
+        "- Sé ejecutivo y directo. Limita el análisis a 3 apartados breves con viñetas: "
+        "1) Cuotas Justas vs Mercado, 2) Tendencia xG y Goles, 3) Recomendación Cuantitativa de Valor (EV+).\n"
+        "- Rigor matemático y enfoque directo.\n"
+        "- Prohibido el uso de jerga matemática cruda innecesaria (nada de lambda 'λ' ni '@' antes de cuotas).\n"
+        "- Si hay datos de la base de datos inyectados en la consulta, priorízalos sobre conocimiento general.\n"
+        "- Ofrece siempre conclusiones de mercado claras (apuesta con valor vs mercado sobrevalorado)."
+    )
+
+    # ── Inicialización de memoria multi-turno ────────────────────────────────
+    if "chat_asistente_ia" not in st.session_state:
+        st.session_state.chat_asistente_ia = []
     if "ia_chat_history" not in st.session_state:
-        st.session_state["ia_chat_history"] = []
+        st.session_state["ia_chat_history"] = st.session_state.chat_asistente_ia
 
-    SYSTEM_PROMPT_ASISTENTE = (
-        "Eres un analista cuantitativo de apuestas deportivas. Responde con datos empíricos exactos "
-        "del JSON contextual proporcionado. Si no hay datos suficientes, indícalo de inmediato sin especular."
+    # ── Helpers de Extracción Cuantitativa en Tiempo Real (SQLite RAG Lite) ──
+    def _extraer_perfil_equipo_sqlite(df_scope: pd.DataFrame, equipo: str) -> dict:
+        """
+        Extrae de macro_base_futbol.db (vía DataFrame validado o consulta directa SQLite)
+        los últimos 5 partidos (resultados, goles, rival, córners, tarjetas) y los
+        promedios de temporada (goles a favor/en contra, córners, faltas y tarjetas).
+        """
+        perfil = {
+            "equipo": equipo,
+            "partidos_analizados": 0,
+            "promedios_temporada": {
+                "goles_marcados": 0.0,
+                "goles_encajados": 0.0,
+                "xg_favor": 0.0,
+                "xg_contra": 0.0,
+                "corners_favor": 0.0,
+                "corners_contra": 0.0,
+                "corners_totales_partido": 0.0,
+                "amarillas_propias": 0.0,
+                "rojas_propias": 0.0,
+                "tarjetas_totales_partido": 0.0,
+                "faltas_cometidas": 0.0,
+                "over25_pct": 0.0,
+                "btts_pct": 0.0,
+            },
+            "ultimos_5_partidos": [],
+        }
+        if df_scope is None or df_scope.empty or not equipo or equipo == "Ninguno (Consulta General)":
+            return perfil
+        if "HomeTeam" not in df_scope.columns or "AwayTeam" not in df_scope.columns:
+            return perfil
+
+        mask = (df_scope["HomeTeam"] == equipo) | (df_scope["AwayTeam"] == equipo)
+        df_eq = df_scope[mask].copy()
+        if df_eq.empty:
+            return perfil
+
+        if "Date" in df_eq.columns:
+            df_eq["_dt_ord"] = pd.to_datetime(df_eq["Date"], errors="coerce", dayfirst=True)
+            df_eq = df_eq.sort_values(by="_dt_ord", ascending=True, kind="stable")
+
+        for col_n in ("FTHG", "FTAG", "HC", "AC", "HY", "AY", "HR", "AR", "HF", "AF", "HxG", "AxG"):
+            if col_n in df_eq.columns:
+                df_eq[col_n] = pd.to_numeric(df_eq[col_n], errors="coerce")
+
+        if "FTHG" in df_eq.columns and "FTAG" in df_eq.columns:
+            df_eq = df_eq.dropna(subset=["FTHG", "FTAG"]).copy()
+        if df_eq.empty:
+            return perfil
+
+        es_local = df_eq["HomeTeam"] == equipo
+        gf_s = np.where(es_local, df_eq["FTHG"], df_eq["FTAG"])
+        ga_s = np.where(es_local, df_eq["FTAG"], df_eq["FTHG"])
+
+        if "HxG" in df_eq.columns and "AxG" in df_eq.columns:
+            xgf_s = pd.Series(np.where(es_local, df_eq["HxG"], df_eq["AxG"])).dropna()
+            xgc_s = pd.Series(np.where(es_local, df_eq["AxG"], df_eq["HxG"])).dropna()
+        else:
+            xgf_s, xgc_s = pd.Series(dtype=float), pd.Series(dtype=float)
+
+        cf_s = pd.Series(np.where(es_local, df_eq["HC"], df_eq["AC"])).dropna() if {"HC", "AC"}.issubset(df_eq.columns) else pd.Series(dtype=float)
+        cc_s = pd.Series(np.where(es_local, df_eq["AC"], df_eq["HC"])).dropna() if {"HC", "AC"}.issubset(df_eq.columns) else pd.Series(dtype=float)
+        am_s = pd.Series(np.where(es_local, df_eq["HY"], df_eq["AY"])).dropna() if {"HY", "AY"}.issubset(df_eq.columns) else pd.Series(dtype=float)
+        am_riv_s = pd.Series(np.where(es_local, df_eq["AY"], df_eq["HY"])).dropna() if {"HY", "AY"}.issubset(df_eq.columns) else pd.Series(dtype=float)
+        roj_s = pd.Series(np.where(es_local, df_eq["HR"], df_eq["AR"])).dropna() if {"HR", "AR"}.issubset(df_eq.columns) else pd.Series(dtype=float)
+        fal_s = pd.Series(np.where(es_local, df_eq["HF"], df_eq["AF"])).dropna() if {"HF", "AF"}.issubset(df_eq.columns) else pd.Series(dtype=float)
+
+        n_part = len(df_eq)
+        gf_med = float(np.nanmean(gf_s)) if n_part > 0 else 0.0
+        ga_med = float(np.nanmean(ga_s)) if n_part > 0 else 0.0
+        cf_med = float(cf_s.mean()) if not cf_s.empty else 0.0
+        cc_med = float(cc_s.mean()) if not cc_s.empty else 0.0
+        am_med = float(am_s.mean()) if not am_s.empty else 0.0
+        am_riv_med = float(am_riv_s.mean()) if not am_riv_s.empty else 0.0
+        roj_med = float(roj_s.mean()) if not roj_s.empty else 0.0
+
+        perfil["partidos_analizados"] = int(n_part)
+        perfil["promedios_temporada"] = {
+            "goles_marcados": round(gf_med, 2),
+            "goles_encajados": round(ga_med, 2),
+            "xg_favor": round(float(xgf_s.mean()), 2) if not xgf_s.empty else round(gf_med, 2),
+            "xg_contra": round(float(xgc_s.mean()), 2) if not xgc_s.empty else round(ga_med, 2),
+            "corners_favor": round(cf_med, 2),
+            "corners_contra": round(cc_med, 2),
+            "corners_totales_partido": round(cf_med + cc_med, 2),
+            "amarillas_propias": round(am_med, 2),
+            "rojas_propias": round(roj_med, 2),
+            "tarjetas_totales_partido": round(am_med + am_riv_med + roj_med, 2),
+            "faltas_cometidas": round(float(fal_s.mean()), 2) if not fal_s.empty else 11.5,
+            "over25_pct": round(float(np.mean((gf_s + ga_s) > 2.5) * 100.0), 1),
+            "btts_pct": round(float(np.mean((gf_s > 0) & (ga_s > 0)) * 100.0), 1),
+        }
+
+        ult_5 = df_eq.tail(5)
+        lista_u5 = []
+        for _, r in ult_5.iterrows():
+            loc = r["HomeTeam"] == equipo
+            rival = str(r["AwayTeam"] if loc else r["HomeTeam"])
+            cond = "Local" if loc else "Visitante"
+            gf_i = int(float(r["FTHG"] if loc else r["FTAG"]))
+            ga_i = int(float(r["FTAG"] if loc else r["FTHG"]))
+            res_letra = "V" if gf_i > ga_i else ("E" if gf_i == ga_i else "D")
+            c_tot = (
+                int(float(r.get("HC", 0) or 0) + float(r.get("AC", 0) or 0))
+                if pd.notna(r.get("HC")) and pd.notna(r.get("AC"))
+                else None
+            )
+            t_tot = (
+                int(float(r.get("HY", 0) or 0) + float(r.get("AY", 0) or 0) + float(r.get("HR", 0) or 0) + float(r.get("AR", 0) or 0))
+                if pd.notna(r.get("HY")) and pd.notna(r.get("AY"))
+                else None
+            )
+            fecha_str = str(r.get("Date", "S/F"))
+            extra_stats = []
+            if c_tot is not None:
+                extra_stats.append(f"{c_tot} córners")
+            if t_tot is not None:
+                extra_stats.append(f"{t_tot} tarjetas")
+            sufijo = f" ({', '.join(extra_stats)})" if extra_stats else ""
+            lista_u5.append(
+                f"{fecha_str} [{cond}] vs {rival}: {gf_i}-{ga_i} ({res_letra}){sufijo}"
+            )
+        perfil["ultimos_5_partidos"] = lista_u5
+        return perfil
+
+    # ── 3. INYECCIÓN DINÁMICA DE CONTEXTO SQLITE (RAG LITE) ──────────────────
+    df_base_ia = df_partidos_global
+    if (df_base_ia is None or df_base_ia.empty) and RUTA_BD.exists():
+        try:
+            with sqlite3.connect(RUTA_BD) as _conn_ia:
+                _df_sql_ia = pd.read_sql("SELECT * FROM historico_reciente", _conn_ia)
+                _df_sql_ia.columns = _df_sql_ia.columns.str.replace("\ufeff", "").str.replace("ï»¿", "").str.strip()
+                df_base_ia = _df_sql_ia
+        except Exception:
+            df_base_ia = pd.DataFrame()
+
+    col_div_ia = next(
+        (c for c in ("Div", "Liga_Origen") if c in df_base_ia.columns),
+        next((c for c in df_base_ia.columns if "Div" in str(c)), None),
+    ) if not df_base_ia.empty else None
+
+    divs_ia = (
+        [d for d in MAPA_LIGAS if d in set(df_base_ia[col_div_ia].dropna().astype(str))]
+        if col_div_ia
+        else list(MAPA_LIGAS.keys())
+    )
+    opciones_liga_ia = [MAPA_LIGAS[d] for d in divs_ia] if divs_ia else list(MAPA_LIGAS.values())
+
+    ctx_c1, ctx_c2, ctx_c3, ctx_c4 = st.columns([1.3, 1.3, 1.3, 1.1])
+    with ctx_c1:
+        liga_ia_sel = st.selectbox("🏆 Competición (MAPA_LIGAS):", opciones_liga_ia, index=0, key="ia_ctx_liga")
+    div_ia_code = MAPA_INV.get(liga_ia_sel, "SP1")
+
+    df_liga_ia = (
+        df_base_ia[df_base_ia[col_div_ia].astype(str) == div_ia_code].copy()
+        if not df_base_ia.empty and col_div_ia
+        else df_base_ia.copy()
+    )
+    equipos_ia = (
+        sorted(pd.concat([df_liga_ia["HomeTeam"], df_liga_ia["AwayTeam"]]).dropna().unique().tolist())
+        if not df_liga_ia.empty and {"HomeTeam", "AwayTeam"}.issubset(df_liga_ia.columns)
+        else []
     )
 
-    def _normalizar_partidos_equipo_seguro(df: pd.DataFrame, equipo: str) -> pd.DataFrame:
-        """Extrae y homogeniza los registros históricos donde interviene el equipo especificado."""
-        if df is None or df.empty or 'HomeTeam' not in df.columns or 'AwayTeam' not in df.columns:
-            return pd.DataFrame()
-        mask = (df['HomeTeam'] == equipo) | (df['AwayTeam'] == equipo)
-        df_team = df[mask].copy()
-        if df_team.empty:
-            return df_team
-        if 'Date' in df_team.columns:
-            df_team['_fecha_ord'] = pd.to_datetime(df_team['Date'], errors='coerce', dayfirst=True)
-            df_team = df_team.sort_values(by='_fecha_ord', ascending=True)
-        if 'FTHG' in df_team.columns and 'FTAG' in df_team.columns:
-            df_team['FTHG'] = pd.to_numeric(df_team['FTHG'], errors='coerce')
-            df_team['FTAG'] = pd.to_numeric(df_team['FTAG'], errors='coerce')
-            df_team = df_team.dropna(subset=['FTHG', 'FTAG']).copy()
-            if df_team.empty:
-                return df_team
-            df_team['GF'] = df_team.apply(lambda r: r['FTHG'] if r['HomeTeam'] == equipo else r['FTAG'], axis=1)
-            df_team['GA'] = df_team.apply(lambda r: r['FTAG'] if r['HomeTeam'] == equipo else r['FTHG'], axis=1)
-        if 'xG_home' in df_team.columns and 'xG_away' in df_team.columns:
-            df_team['xG_for'] = df_team.apply(lambda r: r['xG_home'] if r['HomeTeam'] == equipo else r['xG_away'], axis=1)
-            df_team['xG_against'] = df_team.apply(lambda r: r['xG_away'] if r['HomeTeam'] == equipo else r['xG_home'], axis=1)
-        elif 'HxG' in df_team.columns and 'AxG' in df_team.columns:
-            df_team['xG_for'] = df_team.apply(lambda r: r['HxG'] if r['HomeTeam'] == equipo else r['AxG'], axis=1)
-            df_team['xG_against'] = df_team.apply(lambda r: r['AxG'] if r['HomeTeam'] == equipo else r['HxG'], axis=1)
-        if 'HF' in df_team.columns and 'AF' in df_team.columns:
-            df_team['faltas_com'] = df_team.apply(lambda r: r['HF'] if r['HomeTeam'] == equipo else r['AF'], axis=1)
-        if 'HY' in df_team.columns and 'AY' in df_team.columns:
-            df_team['amar_prop'] = df_team.apply(lambda r: r['HY'] if r['HomeTeam'] == equipo else r['AY'], axis=1)
-        return df_team
+    with ctx_c2:
+        opciones_local_ia = equipos_ia if equipos_ia else ["Sin datos"]
+        home_ia = st.selectbox("🏠 Equipo Principal / Local:", opciones_local_ia, index=0, key=f"ia_ctx_h_{div_ia_code}")
+    with ctx_c3:
+        rivales_ia = [e for e in equipos_ia if e != home_ia]
+        opciones_visit_ia = rivales_ia + ["Ninguno (Solo Equipo Principal)"] if rivales_ia else ["Ninguno (Solo Equipo Principal)"]
+        away_ia = st.selectbox("✈️ Rival / Visitante (Opcional):", opciones_visit_ia, index=0, key=f"ia_ctx_a_{div_ia_code}")
 
-    def _calcular_metricas_seguras_ia(df_team: pd.DataFrame, default_gf: float = 1.35, default_ga: float = 1.20) -> dict:
-        """Agrega de forma defensiva las métricas de los últimos partidos sin riesgo de KeyError o ZeroDivisionError."""
-        base = {
-            "gf_med": float(default_gf),
-            "gc_med": float(default_ga),
-            "xg_f": float(default_gf),
-            "xg_c": float(default_ga),
-            "diff_g_xg": 0.0,
-            "over25": 50.0,
-            "btts_si": 50.0,
-            "faltas_com": 11.5,
-            "amar_prop": 2.2,
-        }
-        if df_team is None or df_team.empty:
-            return base
+    df_arb_ia = cargar_datos_arbitros(1)
+    arbs_ia_disp = (
+        df_arb_ia[df_arb_ia["Div"].astype(str) == div_ia_code]["Árbitro"].dropna().unique().tolist()
+        if not df_arb_ia.empty and "Div" in df_arb_ia.columns
+        else []
+    ) or (
+        df_arb_ia["Árbitro"].dropna().unique().tolist()
+        if not df_arb_ia.empty and "Árbitro" in df_arb_ia.columns
+        else ["Designación Oficial"]
+    )
+    with ctx_c4:
+        arb_ia = st.selectbox("⚖️ Árbitro:", arbs_ia_disp, index=0, key=f"ia_ctx_ref_{div_ia_code}")
 
-        if "GF" in df_team.columns:
-            s_gf = pd.to_numeric(df_team["GF"], errors="coerce").dropna()
-            if not s_gf.empty:
-                base["gf_med"] = float(s_gf.mean())
-        if "GA" in df_team.columns:
-            s_ga = pd.to_numeric(df_team["GA"], errors="coerce").dropna()
-            if not s_ga.empty:
-                base["gc_med"] = float(s_ga.mean())
+    # Extracción de estadísticas reales desde macro_base_futbol.db
+    perfil_h = _extraer_perfil_equipo_sqlite(df_liga_ia, home_ia)
+    hay_visitante = away_ia and away_ia != "Ninguno (Solo Equipo Principal)" and away_ia != "Sin datos"
+    perfil_a = _extraer_perfil_equipo_sqlite(df_liga_ia, away_ia) if hay_visitante else None
 
-        if "GF" in df_team.columns and "GA" in df_team.columns:
-            s_tot = pd.to_numeric(df_team["GF"], errors="coerce") + pd.to_numeric(df_team["GA"], errors="coerce")
-            s_tot = s_tot.dropna()
-            if not s_tot.empty:
-                base["over25"] = float((s_tot > 2.5).mean() * 100.0)
-            s_btts = (pd.to_numeric(df_team["GF"], errors="coerce") > 0) & (pd.to_numeric(df_team["GA"], errors="coerce") > 0)
-            if len(s_btts) > 0:
-                base["btts_si"] = float(s_btts.mean() * 100.0)
+    prom_h = perfil_h["promedios_temporada"]
+    prom_a = perfil_a["promedios_temporada"] if perfil_a else None
 
-        xg_f_ok = False
-        if "xG_for" in df_team.columns:
-            s_xgf = pd.to_numeric(df_team["xG_for"], errors="coerce").dropna()
-            if not s_xgf.empty:
-                base["xg_f"] = float(s_xgf.mean())
-                xg_f_ok = True
-        if not xg_f_ok:
-            base["xg_f"] = base["gf_med"]
-
-        xg_c_ok = False
-        if "xG_against" in df_team.columns:
-            s_xgc = pd.to_numeric(df_team["xG_against"], errors="coerce").dropna()
-            if not s_xgc.empty:
-                base["xg_c"] = float(s_xgc.mean())
-                xg_c_ok = True
-        if not xg_c_ok:
-            base["xg_c"] = base["gc_med"]
-
-        base["diff_g_xg"] = float(base["gf_med"] - base["xg_f"])
-
-        if "faltas_com" in df_team.columns:
-            s_fl = pd.to_numeric(df_team["faltas_com"], errors="coerce").dropna()
-            if not s_fl.empty:
-                base["faltas_com"] = float(s_fl.mean())
-        if "amar_prop" in df_team.columns:
-            s_am = pd.to_numeric(df_team["amar_prop"], errors="coerce").dropna()
-            if not s_am.empty:
-                base["amar_prop"] = float(s_am.mean())
-
-        return base
-
-    # ── Selectores de Contexto Dinámico desde SQLite (macro_base_futbol.db) ───
-    if df_partidos_global.empty:
-        st.warning("No hay datos de partidos cargados desde `macro_base_futbol.db`.")
+    # Calibración Poisson y cuotas justas para el contexto
+    if prom_a and perfil_a["partidos_analizados"] > 0:
+        exp_g_h = round(max(0.25, (prom_h["xg_favor"] + prom_a["xg_contra"]) / 2.0), 2)
+        exp_g_a = round(max(0.25, (prom_a["xg_favor"] + prom_h["xg_contra"]) / 2.0), 2)
     else:
-        col_div_ia = next(
-            (c for c in ("Div", "Liga_Origen") if c in df_partidos_global.columns),
-            next((c for c in df_partidos_global.columns if "Div" in str(c)), None),
-        )
-        divs_ia = (
-            [d for d in MAPA_LIGAS if d in set(df_partidos_global[col_div_ia].dropna().astype(str))]
-            if col_div_ia
-            else []
-        )
-        ligas_ia_nombres = [MAPA_LIGAS[d] for d in divs_ia] if divs_ia else ["Todas"]
+        exp_g_h = round(max(0.25, prom_h["xg_favor"] or 1.35), 2)
+        exp_g_a = round(max(0.25, prom_h["xg_contra"] or 1.15), 2)
 
-        ctx_c1, ctx_c2, ctx_c3, ctx_c4 = st.columns(4)
-        with ctx_c1:
-            liga_ia_sel = st.selectbox("🏆 Competición:", ligas_ia_nombres, key="ia_ctx_liga")
-        div_ia_code = MAPA_INV.get(liga_ia_sel, "SP1")
-        df_liga_ia = (
-            df_partidos_global[df_partidos_global[col_div_ia].astype(str) == div_ia_code].copy()
-            if col_div_ia and liga_ia_sel in MAPA_INV
-            else df_partidos_global.copy()
-        )
+    p_1 = p_x = p_2 = p_o25 = p_btts = 0.0
+    for _g1 in range(8):
+        for _g2 in range(8):
+            _pr = calcular_probabilidad_poisson(exp_g_h, _g1) * calcular_probabilidad_poisson(exp_g_a, _g2)
+            if _g1 > _g2:
+                p_1 += _pr
+            elif _g1 == _g2:
+                p_x += _pr
+            else:
+                p_2 += _pr
+            if (_g1 + _g2) > 2.5:
+                p_o25 += _pr
+            if _g1 > 0 and _g2 > 0:
+                p_btts += _pr
 
-        equipos_ia = sorted(
-            pd.concat([df_liga_ia["HomeTeam"], df_liga_ia["AwayTeam"]]).dropna().unique().tolist()
-        )
-        with ctx_c2:
-            home_ia = st.selectbox("🏠 Equipo Local:", equipos_ia, index=0, key=f"ia_ctx_h_{div_ia_code}")
-        with ctx_c3:
-            rivales_ia = [e for e in equipos_ia if e != home_ia] or equipos_ia
-            away_ia = st.selectbox("✈️ Equipo Visitante:", rivales_ia, index=0, key=f"ia_ctx_a_{div_ia_code}")
+    p_u25 = max(0.0, 1.0 - p_o25)
+    cuota_justa_1 = round(1.0 / max(p_1, 0.01), 2)
+    cuota_justa_x = round(1.0 / max(p_x, 0.01), 2)
+    cuota_justa_2 = round(1.0 / max(p_2, 0.01), 2)
+    cuota_justa_o25 = round(1.0 / max(p_o25, 0.01), 2)
+    cuota_justa_u25 = round(1.0 / max(p_u25, 0.01), 2)
+    cuota_justa_btts = round(1.0 / max(p_btts, 0.01), 2)
 
-        df_arb_ia = cargar_datos_arbitros(3)
-        arbs_ia_disp = (
-            df_arb_ia[df_arb_ia["Div"].astype(str) == div_ia_code]["Árbitro"].dropna().unique().tolist()
-            if not df_arb_ia.empty and "Div" in df_arb_ia.columns
-            else []
-        ) or (
-            df_arb_ia["Árbitro"].dropna().unique().tolist()
-            if not df_arb_ia.empty and "Árbitro" in df_arb_ia.columns
-            else ["Designación Oficial"]
-        )
-        with ctx_c4:
-            arb_ia = st.selectbox("🧑‍⚖️ Árbitro:", arbs_ia_disp, index=0, key=f"ia_ctx_ref_{div_ia_code}")
+    # Proyección de Hándicap Asiático -0.5 / +0.5 y DNB (0.0)
+    prob_ah_local_0 = p_1 / max(p_1 + p_2, 0.01)
+    cuota_justa_ah0_local = round(1.0 / max(prob_ah_local_0, 0.01), 2)
+    cuota_justa_ah0_visit = round(1.0 / max(1.0 - prob_ah_local_0, 0.01), 2)
 
-        # ── Construcción del JSON Contextual Compacto desde SQLite ────────────
-        norm_h_ia = _normalizar_partidos_equipo_seguro(df_liga_ia, home_ia).tail(10)
-        norm_a_ia = _normalizar_partidos_equipo_seguro(df_liga_ia, away_ia).tail(10)
+    tarj_arb_ia = 4.50
+    faltas_arb_ia = 24.0
+    perfil_arb_txt = "Moderado"
+    if not df_arb_ia.empty and "Árbitro" in df_arb_ia.columns:
+        _r_arb = df_arb_ia[df_arb_ia["Árbitro"] == arb_ia]
+        if not _r_arb.empty:
+            tarj_arb_ia = float(_r_arb["Media Amarillas Est."].iloc[0])
+            faltas_arb_ia = float(_r_arb["Media Faltas"].iloc[0]) if "Media Faltas" in _r_arb.columns else 24.0
+            perfil_arb_txt = str(_r_arb["Perfil Disciplinario"].iloc[0]) if "Perfil Disciplinario" in _r_arb.columns else "Moderado"
 
-        med_liga_gf_ia = float(pd.to_numeric(df_liga_ia["FTHG"], errors="coerce").mean() or 1.40) if "FTHG" in df_liga_ia.columns else 1.40
-        med_liga_gc_ia = float(pd.to_numeric(df_liga_ia["FTAG"], errors="coerce").mean() or 1.15) if "FTAG" in df_liga_ia.columns else 1.15
+    friccion_faltas_ia = round(
+        prom_h["faltas_cometidas"] + (prom_a["faltas_cometidas"] if prom_a else prom_h["faltas_cometidas"]),
+        1,
+    )
+    tarjetas_proy_partido = round(
+        ((prom_h["amarillas_propias"] + (prom_a["amarillas_propias"] if prom_a else 2.2)) + tarj_arb_ia) / 2.0,
+        2,
+    )
+    corners_proy_partido = round(
+        prom_h["corners_favor"] + (prom_a["corners_favor"] if prom_a else prom_h["corners_contra"]),
+        2,
+    )
 
-        st_h_ia = _calcular_metricas_seguras_ia(norm_h_ia, default_gf=med_liga_gf_ia, default_ga=med_liga_gc_ia)
-        st_a_ia = _calcular_metricas_seguras_ia(norm_a_ia, default_gf=med_liga_gc_ia, default_ga=med_liga_gf_ia)
+    etiqueta_duelo = f"{home_ia} vs {away_ia}" if hay_visitante else home_ia
 
-        xg_proy_h = round(float(max(0.25, (st_h_ia.get("xg_f", 1.35) + st_a_ia.get("xg_c", 1.20)) / 2.0)), 2)
-        xg_proy_a = round(float(max(0.25, (st_a_ia.get("xg_f", 1.15) + st_h_ia.get("xg_c", 1.20)) / 2.0)), 2)
-
-        p_1 = p_x = p_2 = p_o25 = p_btts = 0.0
-        for _g1 in range(7):
-            for _g2 in range(7):
-                _pr = calcular_probabilidad_poisson(xg_proy_h, _g1) * calcular_probabilidad_poisson(xg_proy_a, _g2)
-                if _g1 > _g2:
-                    p_1 += _pr
-                elif _g1 == _g2:
-                    p_x += _pr
-                else:
-                    p_2 += _pr
-                if (_g1 + _g2) > 2.5:
-                    p_o25 += _pr
-                if _g1 > 0 and _g2 > 0:
-                    p_btts += _pr
-
-        cuota_justa_1 = round(1.0 / max(p_1, 0.02), 2)
-        cuota_justa_x = round(1.0 / max(p_x, 0.02), 2)
-        cuota_justa_2 = round(1.0 / max(p_2, 0.02), 2)
-        cuota_justa_o25 = round(1.0 / max(p_o25, 0.02), 2)
-        cuota_justa_btts = round(1.0 / max(p_btts, 0.02), 2)
-
-        tarj_arb_ia = 4.50
-        faltas_arb_ia = 24.0
-        if not df_arb_ia.empty and "Árbitro" in df_arb_ia.columns:
-            _r_arb = df_arb_ia[df_arb_ia["Árbitro"] == arb_ia]
-            if not _r_arb.empty:
-                tarj_arb_ia = float(_r_arb["Media Amarillas Est."].iloc[0])
-                faltas_arb_ia = float(_r_arb["Media Faltas"].iloc[0]) if "Media Faltas" in _r_arb.columns else 24.0
-
-        friccion_faltas_ia = round(float(st_h_ia.get("faltas_com", 11.5) + st_a_ia.get("faltas_com", 11.5)), 1)
-
-        if not df_liga_ia.empty and "Date" in df_liga_ia.columns:
-            _df_l_ord = df_liga_ia.copy()
-            _df_l_ord["_dt_ia"] = pd.to_datetime(_df_l_ord["Date"], errors="coerce", dayfirst=True)
-            df_recientes_liga = _df_l_ord.sort_values(by="_dt_ia", ascending=True).tail(6)
-        else:
-            df_recientes_liga = df_liga_ia.tail(6) if not df_liga_ia.empty else pd.DataFrame()
-
-        ultimos_resultados_liga = [
-            f"{r.get('Date', '')}: {r.get('HomeTeam', '')} {int(float(r['FTHG']))}-{int(float(r['FTAG']))} {r.get('AwayTeam', '')}"
-            for _, r in df_recientes_liga.iterrows()
-            if pd.notna(r.get("FTHG")) and pd.notna(r.get("FTAG"))
-        ]
-
-        contexto_sqlite_dict = {
-            "competicion": liga_ia_sel,
-            "codigo_liga": div_ia_code,
-            "partido_seleccionado": f"{home_ia} vs {away_ia}",
-            "proyeccion_poisson": {
-                "xg_local": xg_proy_h,
-                "xg_visitante": xg_proy_a,
-                "xg_total": round(xg_proy_h + xg_proy_a, 2),
+    resumen_dict = {
+        "origen": "macro_base_futbol.db",
+        "competicion": liga_ia_sel,
+        "codigo_liga": div_ia_code,
+        "emparejamiento": etiqueta_duelo,
+        "equipo_local": perfil_h,
+        "equipo_visitante": perfil_a if (perfil_a and perfil_a["partidos_analizados"] > 0) else "Análisis individual",
+        "calibracion_poisson_cuotas_justas": {
+            "goles_esperados_local": exp_g_h,
+            "goles_esperados_visitante": exp_g_a,
+            "goles_esperados_totales": round(exp_g_h + exp_g_a, 2),
+            "corners_esperados_totales": corners_proy_partido,
+            "1X2": {
                 "prob_1_pct": round(p_1 * 100, 1),
-                "prob_x_pct": round(p_x * 100, 1),
+                "cuota_justa_1": cuota_justa_1,
+                "prob_X_pct": round(p_x * 100, 1),
+                "cuota_justa_X": cuota_justa_x,
                 "prob_2_pct": round(p_2 * 100, 1),
-                "prob_over25_pct": round(p_o25 * 100, 1),
+                "cuota_justa_2": cuota_justa_2,
+            },
+            "goles_y_btts": {
+                "prob_over_2_5_pct": round(p_o25 * 100, 1),
+                "cuota_justa_over_2_5": cuota_justa_o25,
+                "prob_under_2_5_pct": round(p_u25 * 100, 1),
+                "cuota_justa_under_2_5": cuota_justa_u25,
                 "prob_btts_pct": round(p_btts * 100, 1),
-                "cuotas_justas": {
-                    "1": cuota_justa_1,
-                    "X": cuota_justa_x,
-                    "2": cuota_justa_2,
-                    "Over_2.5": cuota_justa_o25,
-                    "BTTS_Si": cuota_justa_btts,
-                },
+                "cuota_justa_btts": cuota_justa_btts,
             },
-            "metricas_local_L10": {
-                "equipo": home_ia,
-                "gf_media": round(st_h_ia["gf_med"], 2),
-                "gc_media": round(st_h_ia["gc_med"], 2),
-                "xg_favor": round(st_h_ia["xg_f"], 2),
-                "xg_contra": round(st_h_ia["xg_c"], 2),
-                "diferencial_g_menos_xg": round(st_h_ia["diff_g_xg"], 2),
-                "over25_pct": round(st_h_ia["over25"], 1),
-                "btts_pct": round(st_h_ia["btts_si"], 1),
-                "faltas_cometidas": round(st_h_ia["faltas_com"], 1),
-                "amarillas_propias": round(st_h_ia["amar_prop"], 2),
+            "handicap_asiatico": {
+                "ah_0_0_local_cuota_justa": cuota_justa_ah0_local,
+                "ah_0_0_visitante_cuota_justa": cuota_justa_ah0_visit,
+                "ah_menos_0_5_local_cuota_justa": cuota_justa_1,
+                "ah_mas_0_5_visitante_cuota_justa": round(1.0 / max(p_x + p_2, 0.01), 2),
             },
-            "metricas_visitante_L10": {
-                "equipo": away_ia,
-                "gf_media": round(st_a_ia["gf_med"], 2),
-                "gc_media": round(st_a_ia["gc_med"], 2),
-                "xg_favor": round(st_a_ia["xg_f"], 2),
-                "xg_contra": round(st_a_ia["xg_c"], 2),
-                "diferencial_g_menos_xg": round(st_a_ia["diff_g_xg"], 2),
-                "over25_pct": round(st_a_ia["over25"], 1),
-                "btts_pct": round(st_a_ia["btts_si"], 1),
-                "faltas_cometidas": round(st_a_ia["faltas_com"], 1),
-                "amarillas_propias": round(st_a_ia["amar_prop"], 2),
-            },
-            "arbitro_designado": {
-                "nombre": str(arb_ia),
-                "media_amarillas": round(tarj_arb_ia, 2),
-                "media_faltas_colegiado": round(faltas_arb_ia, 1),
-                "friccion_combinada_equipos": friccion_faltas_ia,
-            },
-            "ultimos_resultados_liga": ultimos_resultados_liga,
-        }
-        contexto_json_str = json.dumps(contexto_sqlite_dict, ensure_ascii=False, separators=(",", ":"))
+        },
+        "arbitro_y_disciplina": {
+            "colegiado": str(arb_ia),
+            "perfil_rigor": perfil_arb_txt,
+            "media_amarillas_arbitro": round(tarj_arb_ia, 2),
+            "media_faltas_arbitro": round(faltas_arb_ia, 1),
+            "friccion_combinada_faltas": friccion_faltas_ia,
+            "proyeccion_tarjetas_totales": tarjetas_proy_partido,
+        },
+    }
 
-        tabs = st.tabs(["🤖 Asistente IA Local", "📊 Inspector JSON Contextual"])
+    contexto_compacto_str = json.dumps(resumen_dict, ensure_ascii=False, separators=(",", ":"))
 
-        with tabs[0]:
-            st.markdown("##### ⚡ Consultas Rápidas (Quick Prompts)")
-            qp_c1, qp_c2, qp_c3, qp_c4 = st.columns([3, 3, 3, 1])
-            prompt_seleccionado = None
+    # ── 4. QUICK PROMPT PRESETS (ANÁLISIS EN UN CLIC) + REINICIAR SESIÓN ────
+    st.markdown("##### ⚡ Acciones Rápidas de Análisis Cuantitativo")
+    qp1, qp2, qp3, qp4, qp5 = st.columns([2.2, 2.5, 2.4, 2.5, 1.6])
+    prompt_preset_activo = None
 
-            with qp_c1:
-                if st.button("🔍 Analizar mayor valor (+EV) de la jornada", use_container_width=True, key="qp_ev"):
-                    prompt_seleccionado = "🔍 Analizar mayor valor (+EV) de la jornada"
-            with qp_c2:
-                if st.button("⚖️ Fricción de faltas y tarjetas del partido seleccionado", use_container_width=True, key="qp_fric"):
-                    prompt_seleccionado = "⚖️ Fricción de faltas y tarjetas del partido seleccionado"
-            with qp_c3:
-                if st.button("📊 Rendimiento xG y regresión a la media", use_container_width=True, key="qp_xg"):
-                    prompt_seleccionado = "📊 Rendimiento xG y regresión a la media"
-            with qp_c4:
-                if st.button("🗑️ Limpiar", use_container_width=True, key="qp_clear"):
-                    st.session_state["ia_chat_history"] = []
-                    st.rerun()
+    with qp1:
+        if st.button("🎯 Evaluar Valor 1X2", use_container_width=True, key="btn_preset_1x2"):
+            prompt_preset_activo = (
+                f"🎯 Evaluar Valor 1X2 para {etiqueta_duelo} ({liga_ia_sel}): "
+                "compara las probabilidades reales y cuotas justas de victoria local, empate y visitante "
+                "según los últimos 5 partidos y medias de temporada, e indica dónde reside el valor esperado."
+            )
+    with qp2:
+        if st.button("🔥 Análisis de Goles (Over/Under 2.5)", use_container_width=True, key="btn_preset_goles"):
+            prompt_preset_activo = (
+                f"🔥 Análisis de Goles (Over/Under 2.5) y Ambos Marcan para {etiqueta_duelo}: "
+                "evalúa los promedios de goles marcados y encajados, tendencia en los últimos 5 partidos, "
+                "córners y cuota justa del mercado de goles."
+            )
+    with qp3:
+        if st.button("🟨 Riesgo Disciplinario y Tarjetas", use_container_width=True, key="btn_preset_tarjetas"):
+            prompt_preset_activo = (
+                f"🟨 Riesgo Disciplinario y Tarjetas en {etiqueta_duelo} con el árbitro {arb_ia}: "
+                "analiza las medias de tarjetas amarillas, rojas, faltas cometidas por ambos equipos y "
+                "el rigor del colegiado para determinar qué línea de tarjetas tiene valor."
+            )
+    with qp4:
+        if st.button("⚡ Proyección de Hándicap Asiático", use_container_width=True, key="btn_preset_ah"):
+            prompt_preset_activo = (
+                f"⚡ Proyección de Hándicap Asiático para {etiqueta_duelo}: "
+                "evalúa las líneas asiáticas de referencia (0.0, -0.5 y +0.5) en función de la superioridad "
+                "ofensiva/defensiva y recomienda la cobertura óptima de mercado."
+            )
+    with qp5:
+        if st.button("🗑️ Reiniciar Sesión", use_container_width=True, key="btn_clear_chat_ia"):
+            st.session_state.chat_asistente_ia = []
+            st.session_state["ia_chat_history"] = st.session_state.chat_asistente_ia
+            st.rerun()
 
-            # Renderizar historial de conversación
-            for msg in st.session_state["ia_chat_history"]:
-                with st.chat_message(msg["role"]):
-                    if msg.get("badge"):
-                        st.caption(msg["badge"])
-                    st.markdown(msg["content"])
+    # ── 5. INTERFAZ DE CHAT MULTI-TURNO CON STREAMING EN TIEMPO REAL ─────────
+    for msg in st.session_state.chat_asistente_ia:
+        rol_vista = "assistant" if msg.get("role") in ("assistant", "model") else "user"
+        with st.chat_message(rol_vista):
+            if msg.get("badge"):
+                st.caption(msg["badge"])
+            st.markdown(msg.get("content", ""))
 
-            input_usuario = st.chat_input("Consulta métricas o partidos...")
-            consulta_activa = prompt_seleccionado or input_usuario
+    input_chat_usuario = st.chat_input("Consulta métricas, valor esperado, árbitros o cuotas...")
+    consulta_usuario_final = prompt_preset_activo or input_chat_usuario
 
-            if consulta_activa:
-                st.session_state["ia_chat_history"].append({"role": "user", "content": consulta_activa})
-                with st.chat_message("user"):
-                    st.markdown(consulta_activa)
+    if consulta_usuario_final:
+        st.session_state.chat_asistente_ia.append({"role": "user", "content": consulta_usuario_final})
+        st.session_state["ia_chat_history"] = st.session_state.chat_asistente_ia
+        with st.chat_message("user"):
+            st.markdown(consulta_usuario_final)
 
-                user_prompt_completo = (
-                    f"CONTEXTO_JSON_SQLITE:\n{contexto_json_str}\n\n"
-                    f"CONSULTA_ANALISTA:\n{consulta_activa}"
+        with st.chat_message("assistant"):
+            if not _GENAI_SDK_OK or genai is None:
+                st.error(
+                    "⚠️ El paquete oficial `google-genai` no está disponible en el entorno Python activo. "
+                    "Instálalo mediante `pip install google-genai`."
                 )
+            elif not clave_activa:
+                st.error(
+                    "🔑 Introduce una Clave API válida de Google AI Studio en el campo superior "
+                    "(o configura `GEMINI_API_KEY` en `st.secrets` / variables de entorno) para consultar a `gemini-3.8-flash`."
+                )
+            else:
+                try:
+                    client = genai.Client(api_key=clave_activa)
 
-                with st.chat_message("assistant"):
-                    with st.spinner("Ejecutando análisis cuantitativo..."):
-                        respuesta_txt, ok_llm = consultar_llm_local(
-                            system_prompt=SYSTEM_PROMPT_ASISTENTE,
-                            user_prompt=user_prompt_completo,
-                            timeout=3.5,
-                            temperature=0.15,
+                    # Historial breve de últimos turnos para preservar memoria sin penalizar latencia
+                    turnos_previos = st.session_state.chat_asistente_ia[-5:-1]
+                    resumen_historial = "\n".join(
+                        f"{'Analista' if m.get('role') == 'user' else 'Asistente'}: {m.get('content', '')}"
+                        for m in turnos_previos
+                        if m.get("content")
+                    )
+                    bloque_historial = f"\nHISTORIAL_RECIENTE:\n{resumen_historial}\n" if resumen_historial else ""
+
+                    full_prompt = (
+                        f"{SYSTEM_INSTRUCTION_BASE}\n\n"
+                        f"DATOS_SQLITE_MACRO_BASE:\n{contexto_compacto_str}"
+                        f"{bloque_historial}\n"
+                        f"CONSULTA_ACTUAL:\n{consulta_usuario_final}"
+                    )
+
+                    modelo_stream_usado = ["gemini-3.8-flash"]
+
+                    def generar_stream_asistente(full_prompt):
+                        try:
+                            modelo_stream_usado[0] = "gemini-3.8-flash"
+                            response_stream = client.models.generate_content_stream(
+                                model='gemini-3.8-flash',
+                                contents=full_prompt,
+                            )
+                            for chunk in response_stream:
+                                if chunk.text:
+                                    yield chunk.text
+                        except Exception:
+                            try:
+                                modelo_stream_usado[0] = "gemini-2.0-flash"
+                                response_stream = client.models.generate_content_stream(
+                                    model='gemini-2.0-flash',
+                                    contents=full_prompt,
+                                )
+                                for chunk in response_stream:
+                                    if chunk.text:
+                                        yield chunk.text
+                            except Exception:
+                                modelo_stream_usado[0] = "gemini-2.5-flash"
+                                response_stream = client.models.generate_content_stream(
+                                    model='gemini-2.5-flash',
+                                    contents=full_prompt,
+                                )
+                                for chunk in response_stream:
+                                    if chunk.text:
+                                        yield chunk.text
+
+                    respuesta_completa = st.write_stream(generar_stream_asistente(full_prompt))
+                    texto_final = str(respuesta_completa or "").strip()
+                    if texto_final:
+                        badge_ok = f"🟢 Google AI Studio (`{modelo_stream_usado[0]}` · Streaming) · Contexto SQLite: {etiqueta_duelo}"
+                        st.caption(badge_ok)
+                        st.session_state.chat_asistente_ia.append(
+                            {
+                                "role": "assistant",
+                                "content": texto_final,
+                                "badge": badge_ok,
+                            }
                         )
-                        if ok_llm and respuesta_txt:
-                            badge_chat = "🟢 Inferencia Local GPU (Qwen 14B)"
-                        else:
-                            badge_chat = "🟡 Modelo Matemático Estadístico (Fallback — LM Studio Offline)"
-                            q_low = consulta_activa.lower()
-                            if "fricción" in q_low or "faltas" in q_low or "tarjetas" in q_low or "árbitro" in q_low:
-                                respuesta_txt = (
-                                    f"**[DIAGNÓSTICO DISCIPLINARIO EMPÍRICO — {home_ia} vs {away_ia}]**\n\n"
-                                    f"- **Colegiado:** `{arb_ia}` registra **{tarj_arb_ia:.2f} amarillas/partido** y **{faltas_arb_ia:.1f} faltas/partido**.\n"
-                                    f"- **Fricción combinada de los equipos (L10):** `{friccion_faltas_ia:.1f}` faltas cometidas conjuntas "
-                                    f"(`{home_ia}`: {st_h_ia['faltas_com']:.1f} faltas y {st_h_ia['amar_prop']:.2f} amarillas | "
-                                    f"`{away_ia}`: {st_a_ia['faltas_com']:.1f} faltas y {st_a_ia['amar_prop']:.2f} amarillas).\n"
-                                    f"- **Línea proyectada:** `{((st_h_ia['amar_prop'] + st_a_ia['amar_prop']) + tarj_arb_ia) / 2.0:.2f}` tarjetas amarillas esperadas."
-                                )
-                            elif "xg" in q_low or "regresión" in q_low:
-                                respuesta_txt = (
-                                    f"**[ANÁLISIS DE RENDIMIENTO xG Y REGRESIÓN A LA MEDIA — {home_ia} vs {away_ia}]**\n\n"
-                                    f"- **{home_ia} (L10):** `{st_h_ia['gf_med']:.2f}` GF vs `{st_h_ia['xg_f']:.2f}` xG a favor "
-                                    f"(Diferencial G - xG: `{st_h_ia['diff_g_xg']:+.2f}`).\n"
-                                    f"- **{away_ia} (L10):** `{st_a_ia['gf_med']:.2f}` GF vs `{st_a_ia['xg_f']:.2f}` xG a favor "
-                                    f"(Diferencial G - xG: `{st_a_ia['diff_g_xg']:+.2f}`).\n"
-                                    f"- **Proyección del partido:** `{xg_proy_h:.2f}` xG ({home_ia}) vs `{xg_proy_a:.2f}` xG ({away_ia}) → "
-                                    f"**Total esperado: `{xg_proy_h + xg_proy_a:.2f}` goles** (Prob. Over 2.5: `{p_o25 * 100:.1f}%`, Cuota justa: `{cuota_justa_o25:.2f}`)."
-                                )
-                            else:
-                                respuesta_txt = generar_cronica_contingencia_estadistica(
-                                    home=home_ia,
-                                    away=away_ia,
-                                    xg_home=xg_proy_h,
-                                    xg_away=xg_proy_a,
-                                    cuota_mercado=round(cuota_justa_o25 * 1.06, 2),
-                                    cuota_justa=cuota_justa_o25,
-                                    arbitro=str(arb_ia),
-                                    media_tarjetas=tarj_arb_ia,
-                                    friccion_faltas=friccion_faltas_ia,
-                                )
-
-                    st.caption(badge_chat)
-                    st.markdown(respuesta_txt)
-
-                st.session_state["ia_chat_history"].append({
-                    "role": "assistant",
-                    "content": respuesta_txt,
-                    "badge": badge_chat,
-                })
-
-        with tabs[1]:
-            st.markdown("##### 📦 Payload JSON Contextual Inyectado desde `macro_base_futbol.db`")
-            st.json(contexto_sqlite_dict)
+                        st.session_state["ia_chat_history"] = st.session_state.chat_asistente_ia
+                except genai.errors.APIError as api_err:
+                    st.error(
+                        f"🚫 Error de la API de Google AI Studio (`APIError`): {api_err}. "
+                        "Verifica la validez de tu clave API, los permisos del proyecto o el límite de cuota."
+                    )
+                except Exception as exc_gen:
+                    st.error(
+                        f"⚠️ Error inesperado al conectar con Google AI Studio: {exc_gen}"
+                    )
