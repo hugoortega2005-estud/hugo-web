@@ -4671,16 +4671,23 @@ elif menu_seleccionado == "🎯 Radar de Tendencias":
         st.warning("No hay suficientes datos históricos disponibles en `macro_base_futbol.db`.")
     else:
         # Normalización defensiva de columna de liga para soportar tanto filtro lateral como selector propio
-        df_rad_base = df_partidos.copy()
-        col_div_rad = next(
-            (c for c in ("Div", "Liga_Origen") if c in df_rad_base.columns),
-            next((c for c in df_rad_base.columns if "Div" in str(c)), None),
-        )
-        divs_disp_rad = (
-            [d for d in MAPA_LIGAS if d in set(df_rad_base[col_div_rad].dropna().astype(str))]
-            if col_div_rad
-            else []
-        )
+        try:
+            df_rad_base = df_partidos.copy()
+            col_div_rad = next(
+                (c for c in ("Div", "Liga_Origen") if c in df_rad_base.columns),
+                next((c for c in df_rad_base.columns if "Div" in str(c)), None),
+            )
+            divs_disp_rad = (
+                [d for d in MAPA_LIGAS if d in set(df_rad_base[col_div_rad].dropna().astype(str))]
+                if col_div_rad
+                else []
+            )
+        except Exception as _exc_init_rad:
+            st.session_state["radar_runtime_warning"] = f"Aviso de inicialización en Radar: {_exc_init_rad}"
+            df_rad_base = pd.DataFrame()
+            col_div_rad = None
+            divs_disp_rad = []
+
         opciones_liga_rad = ["Todas las Competiciones"] + [MAPA_LIGAS[d] for d in divs_disp_rad]
 
         col_rf0, col_rf1, col_rf2 = st.columns([1.2, 1.8, 1.3])
@@ -4707,144 +4714,757 @@ elif menu_seleccionado == "🎯 Radar de Tendencias":
                 key="radar_umbral_racha",
             )
 
-        if liga_rad_sel != "Todas las Competiciones" and col_div_rad:
-            div_target_rad = MAPA_INV.get(liga_rad_sel, "")
-            df_rad = df_rad_base[df_rad_base[col_div_rad].astype(str) == str(div_target_rad)].copy()
-        else:
+        try:
+            if liga_rad_sel != "Todas las Competiciones" and col_div_rad and not df_rad_base.empty:
+                div_target_rad = MAPA_INV.get(liga_rad_sel, "")
+                df_rad = df_rad_base[df_rad_base[col_div_rad].astype(str) == str(div_target_rad)].copy()
+            else:
+                df_rad = df_rad_base.copy()
+
+            for _cn in (
+                "FTHG", "FTAG", "HTHG", "HTAG", "HC", "AC", "HY", "AY", "HR", "AR",
+                "AHh", "AHCh", "Avg>2.5", "B365>2.5", "Max>2.5",
+                "AvgH", "AvgD", "AvgA", "B365H", "B365A",
+                "AvgAHH", "AvgAHA", "B365AHH", "B365AHA", "MaxAHH", "MaxAHA",
+            ):
+                if _cn in df_rad.columns:
+                    df_rad[_cn] = pd.to_numeric(df_rad[_cn], errors="coerce")
+
+            if "Date" in df_rad.columns:
+                df_rad["Date_Parsed"] = pd.to_datetime(df_rad["Date"], errors="coerce", dayfirst=True)
+            else:
+                df_rad["Date_Parsed"] = pd.NaT
+        except Exception as _exc_prep_rad:
+            st.session_state["radar_runtime_warning"] = f"Aviso al preparar datos del Radar: {_exc_prep_rad}"
             df_rad = df_rad_base.copy()
-
-        for _cn in (
-            "FTHG", "FTAG", "HTHG", "HTAG", "HC", "AC", "HY", "AY", "HR", "AR",
-            "AHh", "AHCh", "Avg>2.5", "B365>2.5", "Max>2.5",
-            "AvgH", "AvgD", "AvgA", "B365H", "B365A",
-            "AvgAHH", "AvgAHA", "B365AHH", "B365AHA", "MaxAHH", "MaxAHA",
-        ):
-            if _cn in df_rad.columns:
-                df_rad[_cn] = pd.to_numeric(df_rad[_cn], errors="coerce")
-
-        if "Date" in df_rad.columns:
-            df_rad["Date_Parsed"] = pd.to_datetime(df_rad["Date"], errors="coerce", dayfirst=True)
-        else:
-            df_rad["Date_Parsed"] = pd.NaT
+            if "Date_Parsed" not in df_rad.columns:
+                df_rad["Date_Parsed"] = pd.NaT
 
         # ── Helpers internos del Radar (Pilar 2, 3, 4 y 5) ───────────────────
+        import unicodedata as _ud_rad
+        import difflib as _difflib_rad
+        try:
+            import conector_odds as _co_rad
+        except Exception:
+            _co_rad = None
+
         def _abrev_rival_radar(nombre_eq: str) -> str:
-            limpio = "".join(ch for ch in str(nombre_eq or "RIV").upper() if ch.isalnum() or ch == " ").strip()
-            partes = limpio.split()
-            if len(partes) >= 2 and len(partes[0]) <= 3:
-                return (partes[0][:1] + partes[1][:2]).upper()[:3]
-            return (limpio.replace(" ", "") + "RIV")[:3]
+            try:
+                limpio = "".join(ch for ch in str(nombre_eq or "RIV").upper() if ch.isalnum() or ch == " ").strip()
+                partes = limpio.split()
+                if len(partes) >= 2 and len(partes[0]) <= 3:
+                    return (partes[0][:1] + partes[1][:2]).upper()[:3]
+                return (limpio.replace(" ", "") + "RIV")[:3]
+            except Exception:
+                return "RIV"
+
+        _ALIAS_CANONICOS_RADAR = {
+            # España (LaLiga / LaLiga 2)
+            "athletic": "Ath Bilbao",
+            "athletic club": "Ath Bilbao",
+            "athletic bilbao": "Ath Bilbao",
+            "athletic club de bilbao": "Ath Bilbao",
+            "ath bilbao": "Ath Bilbao",
+            "sociedad": "Sociedad",
+            "real sociedad": "Sociedad",
+            "la real": "Sociedad",
+            "santander": "Santander",
+            "racing": "Santander",
+            "racing santander": "Santander",
+            "real racing": "Santander",
+            "real racing club": "Santander",
+            "real racing club de santander": "Santander",
+            "racing de santander": "Santander",
+            "espanyol": "Espanol",
+            "rcd espanyol": "Espanol",
+            "rcd espanyol de barcelona": "Espanol",
+            "espanol": "Espanol",
+            "atletico": "Ath Madrid",
+            "atletico madrid": "Ath Madrid",
+            "atletico de madrid": "Ath Madrid",
+            "club atletico de madrid": "Ath Madrid",
+            "ath madrid": "Ath Madrid",
+            "alaves": "Alaves",
+            "deportivo alaves": "Alaves",
+            "cd alaves": "Alaves",
+            "celta": "Celta",
+            "rc celta": "Celta",
+            "celta vigo": "Celta",
+            "celta de vigo": "Celta",
+            "rc celta de vigo": "Celta",
+            "betis": "Betis",
+            "real betis": "Betis",
+            "real betis balompie": "Betis",
+            "vallecano": "Vallecano",
+            "rayo vallecano": "Vallecano",
+            "rayo": "Vallecano",
+            "leganes": "Leganes",
+            "cd leganes": "Leganes",
+            "valladolid": "Valladolid",
+            "real valladolid": "Valladolid",
+            "real valladolid cf": "Valladolid",
+            "las palmas": "Las Palmas",
+            "ud las palmas": "Las Palmas",
+            "la coruna": "La Coruna",
+            "deportivo la coruna": "La Coruna",
+            "rc deportivo": "La Coruna",
+            "deportivo": "La Coruna",
+            "osasuna": "Osasuna",
+            "ca osasuna": "Osasuna",
+            "girona": "Girona",
+            "girona fc": "Girona",
+            "mallorca": "Mallorca",
+            "rcd mallorca": "Mallorca",
+            "getafe": "Getafe",
+            "getafe cf": "Getafe",
+            "sevilla": "Sevilla",
+            "sevilla fc": "Sevilla",
+            "valencia": "Valencia",
+            "valencia cf": "Valencia",
+            "villarreal": "Villarreal",
+            "villarreal cf": "Villarreal",
+            "real madrid": "Real Madrid",
+            "real madrid cf": "Real Madrid",
+            "barcelona": "Barcelona",
+            "fc barcelona": "Barcelona",
+            "elche": "Elche",
+            "elche cf": "Elche",
+            "malaga": "Malaga",
+            "malaga cf": "Malaga",
+            "levante": "Levante",
+            "levante ud": "Levante",
+            "oviedo": "Oviedo",
+            "real oviedo": "Oviedo",
+            "gijon": "Gijon",
+            "sporting gijon": "Gijon",
+            "sporting de gijon": "Gijon",
+            "real sporting": "Gijon",
+            "zaragoza": "Zaragoza",
+            "real zaragoza": "Zaragoza",
+            # Inglaterra (Premier League / Championship)
+            "manchester united": "Man United",
+            "man united": "Man United",
+            "man utd": "Man United",
+            "manchester city": "Man City",
+            "man city": "Man City",
+            "nottingham": "Nott'm Forest",
+            "nottingham forest": "Nott'm Forest",
+            "nott'm forest": "Nott'm Forest",
+            "nottm forest": "Nott'm Forest",
+            "wolverhampton": "Wolves",
+            "olverhampton": "Wolves",
+            "wolverhampton wanderers": "Wolves",
+            "wolves": "Wolves",
+            "newcastle": "Newcastle",
+            "newcastle united": "Newcastle",
+            "tottenham": "Tottenham",
+            "tottenham hotspur": "Tottenham",
+            "spurs": "Tottenham",
+            "brighton": "Brighton",
+            "brighton and hove albion": "Brighton",
+            "brighton & hove albion": "Brighton",
+            "west ham": "West Ham",
+            "west ham united": "West Ham",
+            "leicester": "Leicester",
+            "leicester city": "Leicester",
+            "ipswich": "Ipswich",
+            "ipswich town": "Ipswich",
+            "leeds": "Leeds",
+            "leeds united": "Leeds",
+            "coventry": "Coventry",
+            "coventry city": "Coventry",
+            "hull": "Hull",
+            "hull city": "Hull",
+            "bournemouth": "Bournemouth",
+            "afc bournemouth": "Bournemouth",
+            # Alemania (Bundesliga)
+            "bayern": "Bayern Munich",
+            "bayern munich": "Bayern Munich",
+            "bayern munchen": "Bayern Munich",
+            "fc bayern munchen": "Bayern Munich",
+            "leverkusen": "Leverkusen",
+            "bayer leverkusen": "Leverkusen",
+            "bayer 04 leverkusen": "Leverkusen",
+            "dortmund": "Dortmund",
+            "borussia dortmund": "Dortmund",
+            "gladbach": "M'gladbach",
+            "monchengladbach": "M'gladbach",
+            "borussia monchengladbach": "M'gladbach",
+            "m'gladbach": "M'gladbach",
+            "mgladbach": "M'gladbach",
+            "frankfurt": "Ein Frankfurt",
+            "eintracht frankfurt": "Ein Frankfurt",
+            "ein frankfurt": "Ein Frankfurt",
+            "stuttgart": "Stuttgart",
+            "vfb stuttgart": "Stuttgart",
+            "freiburg": "Freiburg",
+            "sc freiburg": "Freiburg",
+            "hoffenheim": "Hoffenheim",
+            "tsg hoffenheim": "Hoffenheim",
+            "tsg 1899 hoffenheim": "Hoffenheim",
+            "heidenheim": "Heidenheim",
+            "1. fc heidenheim": "Heidenheim",
+            "st pauli": "St Pauli",
+            "fc st. pauli": "St Pauli",
+            "fc st pauli": "St Pauli",
+            "mainz": "Mainz",
+            "mainz 05": "Mainz",
+            "fsv mainz 05": "Mainz",
+            "1. fsv mainz 05": "Mainz",
+            "wolfsburg": "Wolfsburg",
+            "vfl wolfsburg": "Wolfsburg",
+            "augsburg": "Augsburg",
+            "fc augsburg": "Augsburg",
+            "fc koln": "FC Koln",
+            "1. fc koln": "FC Koln",
+            "koln": "FC Koln",
+            "cologne": "FC Koln",
+            "hamburg": "Hamburg",
+            "hamburger sv": "Hamburg",
+            "paderborn": "Paderborn",
+            "sc paderborn": "Paderborn",
+            "sc paderborn 07": "Paderborn",
+            "schalke": "Schalke 04",
+            "schalke 04": "Schalke 04",
+            "fc schalke 04": "Schalke 04",
+            "elversberg": "Elversberg",
+            "sv elversberg": "Elversberg",
+            "rb leipzig": "RB Leipzig",
+            "leipzig": "RB Leipzig",
+            "werder bremen": "Werder Bremen",
+            "sv werder bremen": "Werder Bremen",
+            "bremen": "Werder Bremen",
+            "union berlin": "Union Berlin",
+            "1. fc union berlin": "Union Berlin",
+            "bochum": "Bochum",
+            "vfl bochum": "Bochum",
+            "holstein kiel": "Holstein Kiel",
+            "kiel": "Holstein Kiel",
+            # Italia (Serie A)
+            "inter": "Inter",
+            "inter milan": "Inter",
+            "internazionale": "Inter",
+            "fc internazionale": "Inter",
+            "milan": "Milan",
+            "ac milan": "Milan",
+            "juventus": "Juventus",
+            "juventus fc": "Juventus",
+            "roma": "Roma",
+            "as roma": "Roma",
+            "atalanta": "Atalanta",
+            "atalanta bc": "Atalanta",
+            "verona": "Verona",
+            "hellas verona": "Verona",
+            "parma": "Parma",
+            "parma calcio": "Parma",
+            "parma calcio 1913": "Parma",
+            "napoli": "Napoli",
+            "ssc napoli": "Napoli",
+            "lazio": "Lazio",
+            "ss lazio": "Lazio",
+            "fiorentina": "Fiorentina",
+            "acf fiorentina": "Fiorentina",
+            "bologna": "Bologna",
+            "bologna fc": "Bologna",
+            "torino": "Torino",
+            "torino fc": "Torino",
+            "udinese": "Udinese",
+            "udinese calcio": "Udinese",
+            "genoa": "Genoa",
+            "genoa cfc": "Genoa",
+            "cagliari": "Cagliari",
+            "cagliari calcio": "Cagliari",
+            "empoli": "Empoli",
+            "empoli fc": "Empoli",
+            "lecce": "Lecce",
+            "us lecce": "Lecce",
+            "monza": "Monza",
+            "ac monza": "Monza",
+            "venezia": "Venezia",
+            "venezia fc": "Venezia",
+            "como": "Como",
+            "como 1907": "Como",
+            # Francia (Ligue 1)
+            "psg": "Paris SG",
+            "paris": "Paris SG",
+            "paris sg": "Paris SG",
+            "paris saint germain": "Paris SG",
+            "paris saint-germain": "Paris SG",
+            "paris fc": "Paris FC",
+            "monaco": "Monaco",
+            "as monaco": "Monaco",
+            "lens": "Lens",
+            "rc lens": "Lens",
+            "le mans": "Le Mans",
+            "le mans fc": "Le Mans",
+            "marseille": "Marseille",
+            "olympique marseille": "Marseille",
+            "lyon": "Lyon",
+            "olympique lyonnais": "Lyon",
+            "lille": "Lille",
+            "losc lille": "Lille",
+            "nice": "Nice",
+            "ogc nice": "Nice",
+            "rennes": "Rennes",
+            "stade rennais": "Rennes",
+            "brest": "Brest",
+            "stade brestois": "Brest",
+            "reims": "Reims",
+            "stade de reims": "Reims",
+            "strasbourg": "Strasbourg",
+            "rc strasbourg": "Strasbourg",
+            "toulouse": "Toulouse",
+            "toulouse fc": "Toulouse",
+            "montpellier": "Montpellier",
+            "montpellier hsc": "Montpellier",
+            "nantes": "Nantes",
+            "fc nantes": "Nantes",
+            "le havre": "Le Havre",
+            "le havre ac": "Le Havre",
+            "auxerre": "Auxerre",
+            "aj auxerre": "Auxerre",
+            "angers": "Angers",
+            "angers sco": "Angers",
+            "st etienne": "St Etienne",
+            "saint-etienne": "St Etienne",
+            "as saint-etienne": "St Etienne",
+        }
+
+        def _limpiar_texto_radar(texto: str) -> str:
+            try:
+                sin_acentos = _ud_rad.normalize("NFKD", str(texto or "")).encode("ascii", "ignore").decode("ascii")
+                limpio = re.sub(r"[^a-zA-Z0-9'\s-]", " ", sin_acentos).lower()
+                return " ".join(limpio.split())
+            except Exception:
+                return str(texto or "").strip().lower()
+
+        def _despojar_afijos_club_radar(texto_norm: str) -> str:
+            try:
+                t = f" {texto_norm.replace('-', ' ')} "
+                for pref in (
+                    " real ", " rc ", " rcd ", " cf ", " cd ", " ud ", " sd ", " fc ",
+                    " ca ", " ac ", " as ", " sc ", " vfb ", " vfl ", " tsg ", " 1 fc ",
+                    " sv ", " fsv ", " club ", " deportivo ", " balompie ", " sad ",
+                    " de ", " la ", " el ", " calcio ", " 1913 ", " 1907 ", " 05 ", " 07 ",
+                    " bc ", " cfc ", " hsc ", " sco ", " losc ", " ogc ", " aj ",
+                ):
+                    t = t.replace(pref, " ")
+                res = " ".join(t.split())
+                return res if res else texto_norm
+            except Exception:
+                return texto_norm
+
+        def _normalizar_y_emparejar_equipo(nombre_api: str, lista_equipos_db: list[str]) -> str | None:
+            """
+            Normalizador bidireccional y emparejador difuso entre nombres de la API / fuentes externas
+            y los nombres canónicos de `macro_base_futbol.db`.
+            """
+            try:
+                if not nombre_api or not lista_equipos_db:
+                    return None
+
+                raw_str = str(nombre_api).strip()
+                if raw_str in lista_equipos_db:
+                    return raw_str
+
+                idx_norm = {_limpiar_texto_radar(eq): eq for eq in lista_equipos_db if eq}
+                clave_norm = _limpiar_texto_radar(raw_str)
+                if not clave_norm:
+                    return None
+
+                if clave_norm in idx_norm:
+                    return idx_norm[clave_norm]
+
+                # 1) Diccionarios existentes en conector_odds.py y dashboard.py + alias canónicos explícitos
+                mapa_combinado = {}
+                if _co_rad is not None and hasattr(_co_rad, "MAPA_EQUIPOS_API"):
+                    for k_m, v_m in getattr(_co_rad, "MAPA_EQUIPOS_API", {}).items():
+                        mapa_combinado[_limpiar_texto_radar(k_m)] = v_m
+                if "CANONICAL_TEAM_MAP" in globals():
+                    for k_m, v_m in CANONICAL_TEAM_MAP.items():
+                        mapa_combinado[_limpiar_texto_radar(k_m)] = v_m
+                for k_m, v_m in _ALIAS_CANONICOS_RADAR.items():
+                    mapa_combinado[_limpiar_texto_radar(k_m)] = v_m
+
+                if clave_norm in mapa_combinado:
+                    cand_canon = _limpiar_texto_radar(mapa_combinado[clave_norm])
+                    if cand_canon in idx_norm:
+                        return idx_norm[cand_canon]
+
+                # 2) Limpieza de prefijos/sufijos comunes ("real ", "rc ", "cf ", "cd ", "ud ", "fc ", "club ", "deportivo ", "balompie", "sad")
+                clave_strip = _despojar_afijos_club_radar(clave_norm)
+                if clave_strip in idx_norm:
+                    return idx_norm[clave_strip]
+                if clave_strip in mapa_combinado:
+                    cand_canon = _limpiar_texto_radar(mapa_combinado[clave_strip])
+                    if cand_canon in idx_norm:
+                        return idx_norm[cand_canon]
+
+                idx_strip = {_despojar_afijos_club_radar(k): v for k, v in idx_norm.items() if _despojar_afijos_club_radar(k)}
+                if clave_strip in idx_strip:
+                    return idx_strip[clave_strip]
+
+                # 3) Substring / solapamiento de tokens significativos
+                tokens_api = [tk for tk in clave_strip.split() if len(tk) >= 3]
+                for tk in tokens_api:
+                    if tk in mapa_combinado:
+                        cand_tk = _limpiar_texto_radar(mapa_combinado[tk])
+                        if cand_tk in idx_norm and cand_tk not in ("real madrid", "man united", "man city", "paris sg", "paris fc"):
+                            return idx_norm[cand_tk]
+
+                candidatos_sub = []
+                for k_db_s, eq_orig in idx_strip.items():
+                    if not k_db_s:
+                        continue
+                    if clave_strip in k_db_s or (len(k_db_s) >= 4 and k_db_s in clave_strip):
+                        candidatos_sub.append((abs(len(k_db_s) - len(clave_strip)), eq_orig))
+                if candidatos_sub:
+                    candidatos_sub.sort(key=lambda x: x[0])
+                    return candidatos_sub[0][1]
+
+                # 4) Fallback difflib.get_close_matches
+                coincidencias_diff = _difflib_rad.get_close_matches(clave_strip, list(idx_strip.keys()), n=1, cutoff=0.72)
+                if coincidencias_diff:
+                    return idx_strip[coincidencias_diff[0]]
+
+                coincidencias_norm = _difflib_rad.get_close_matches(clave_norm, list(idx_norm.keys()), n=1, cutoff=0.72)
+                if coincidencias_norm:
+                    return idx_norm[coincidencias_norm[0]]
+            except Exception as _exc_norm:
+                st.session_state["radar_norm_warning"] = str(_exc_norm)
+            return None
+
+        @st.cache_data(ttl=1800, show_spinner=False)
+        def _obtener_fixtures_vivo_radar(sport_key: str) -> list[dict]:
+            """
+            Consulta autónoma y cacheada (TTL 30 min) de partidos próximos y cuotas en vivo
+            vía `conector_odds.py` con captura total de excepciones.
+            """
+            if not sport_key:
+                return []
+            try:
+                import conector_odds as _co_local
+                if hasattr(_co_local, "_pedir_cuotas"):
+                    res = _co_local._pedir_cuotas(sport_key, "h2h,totals")
+                    if getattr(res, "status_code", 500) == 200:
+                        datos = res.json()
+                        if isinstance(datos, list):
+                            return datos
+            except Exception:
+                return []
+            return []
+
+        def _parsear_fecha_futura_radar(valor_fecha) -> tuple:
+            """
+            Parsea fechas desde ISO 8601 ('2026-10-31T15:15:00Z'), 'DD/MM/YYYY HH:MM', 'DD/MM/YYYY'
+            o Timestamp. Devuelve (fecha_date, dt_naive_orden, texto_formateado) o (None, None, '').
+            """
+            try:
+                if valor_fecha is None or (isinstance(valor_fecha, float) and pd.isna(valor_fecha)):
+                    return None, None, ""
+                raw = str(valor_fecha).strip()
+                if not raw or raw.lower() in ("nan", "nat", "none", "próxima jornada", "jornada activa", "programado"):
+                    return None, None, ""
+
+                if isinstance(valor_fecha, datetime):
+                    dt_obj = valor_fecha.replace(tzinfo=None)
+                elif hasattr(valor_fecha, "to_pydatetime"):
+                    dt_obj = valor_fecha.to_pydatetime().replace(tzinfo=None)
+                elif hasattr(valor_fecha, "year") and hasattr(valor_fecha, "month") and hasattr(valor_fecha, "day") and not hasattr(valor_fecha, "hour"):
+                    dt_obj = datetime(valor_fecha.year, valor_fecha.month, valor_fecha.day)
+                elif "T" in raw or (len(raw) >= 10 and raw[4:5] == "-" and raw[7:8] == "-"):
+                    dt_iso = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                    dt_obj = dt_iso.replace(tzinfo=None)
+                else:
+                    ts_parsed = pd.to_datetime(raw, errors="coerce", dayfirst=True)
+                    if pd.isna(ts_parsed):
+                        return None, None, ""
+                    dt_obj = ts_parsed.to_pydatetime().replace(tzinfo=None)
+
+                fecha_d = dt_obj.date()
+                if dt_obj.hour != 0 or dt_obj.minute != 0:
+                    fmt_str = dt_obj.strftime("%d/%m/%Y %H:%M")
+                else:
+                    fmt_str = dt_obj.strftime("%d/%m/%Y")
+                return fecha_d, dt_obj, fmt_str
+            except Exception:
+                return None, None, ""
 
         def _construir_horizonte_fixtures_y_cuotas(df_scope: pd.DataFrame) -> tuple[dict, list[dict]]:
             """
-            Cruza calendarios próximos desde:
-            1) Caché activa del Escáner EV+ (`st.session_state.df_ops_export`) y `ev_fix_manual`
-            2) Partidos programados sin marcador (`FTHG.isna()`) en `macro_base_futbol.db`
-            3) Horizonte de la última jornada activa por competición en `macro_base_futbol.db`
-            Devuelve (mapa_equipo_fixture, lista_emparejamientos_unicos).
+            Motor dinámico de horizonte futuro con barrera cronológica estricta (`fecha >= hoy`)
+            y blindaje completo de excepciones para garantizar estabilidad total en Streamlit.
             """
             mapa_eq = {}
             lista_duelos = []
             vistos_duelos = set()
 
-            # A) Cruce con caché de cuotas en vivo de conector_odds (si existe en sesión)
-            df_ops_cache = st.session_state.get("df_ops_export")
-            cuotas_api_duelo = {}
-            if isinstance(df_ops_cache, pd.DataFrame) and not df_ops_cache.empty and "Partido" in df_ops_cache.columns:
-                for _, r_op in df_ops_cache.iterrows():
-                    p_txt = str(r_op.get("Partido", ""))
-                    if " vs " in p_txt:
-                        h_op, a_op = [x.strip() for x in p_txt.split(" vs ", 1)]
-                        f_op = str(r_op.get("Fecha / Hora", "Próxima Jornada"))
-                        m_op = str(r_op.get("Mercado", ""))
-                        c_op = pd.to_numeric(r_op.get("Cuota"), errors="coerce")
-                        cuotas_api_duelo.setdefault((h_op, a_op), {"fecha": f_op, "mercados": {}})
-                        if pd.notna(c_op) and c_op > 1.0:
-                            cuotas_api_duelo[(h_op, a_op)]["mercados"][m_op] = float(c_op)
+            try:
+                hoy = datetime.now().date()
+                equipos_universo = sorted(
+                    pd.concat([df_rad_base["HomeTeam"], df_rad_base["AwayTeam"]]).dropna().astype(str).unique().tolist()
+                ) if (df_rad_base is not None and not df_rad_base.empty and {"HomeTeam", "AwayTeam"}.issubset(df_rad_base.columns)) else []
+                equipos_scope_set = set(
+                    pd.concat([df_scope["HomeTeam"], df_scope["AwayTeam"]]).dropna().astype(str).unique().tolist()
+                ) if (df_scope is not None and not df_scope.empty and {"HomeTeam", "AwayTeam"}.issubset(df_scope.columns)) else set(equipos_universo)
 
-            for (h_op, a_op), info_op in cuotas_api_duelo.items():
-                f_str = info_op["fecha"]
-                mapa_eq[h_op] = {
-                    "rival": a_op,
-                    "condicion": "Local",
-                    "etiqueta": f"vs {a_op} [Local]",
-                    "fecha": f_str,
-                    "cuotas_api": info_op["mercados"],
-                }
-                mapa_eq[a_op] = {
-                    "rival": h_op,
-                    "condicion": "Visitante",
-                    "etiqueta": f"vs {h_op} [Visitante]",
-                    "fecha": f_str,
-                    "cuotas_api": info_op["mercados"],
-                }
-                if (h_op, a_op) not in vistos_duelos:
-                    vistos_duelos.add((h_op, a_op))
-                    lista_duelos.append({"local": h_op, "visitante": a_op, "fecha": f_str, "div": ""})
+                # Registro de partidos ya jugados (especialmente últimos 5 por equipo) para evitar duplicados jugados
+                partidos_jugados_set = set()
+                pares_recientes_u5 = set()
+                try:
+                    if df_rad_base is not None and not df_rad_base.empty and {"FTHG", "FTAG"}.issubset(df_rad_base.columns):
+                        df_jugados = df_rad_base[df_rad_base["FTHG"].notna() & df_rad_base["FTAG"].notna()].copy()
+                        if "Date" in df_jugados.columns:
+                            df_jugados["_dt_j"] = pd.to_datetime(df_jugados["Date"], errors="coerce", dayfirst=True)
+                        else:
+                            df_jugados["_dt_j"] = pd.NaT
 
-            # B) Fixtures manuales cargados en sesión
-            for fx_m in st.session_state.get("ev_fix_manual", []):
-                h_m = str(fx_m.get("Local", "")).strip()
-                a_m = str(fx_m.get("Visitante", "")).strip()
-                dt_m = fx_m.get("Fecha")
-                f_m_str = pd.Timestamp(dt_m).strftime("%d/%m/%Y") if dt_m is not None else "Programado"
-                if h_m and a_m and (h_m, a_m) not in vistos_duelos:
-                    vistos_duelos.add((h_m, a_m))
-                    lista_duelos.append({"local": h_m, "visitante": a_m, "fecha": f_m_str, "div": str(fx_m.get("Div", ""))})
-                    mapa_eq.setdefault(h_m, {"rival": a_m, "condicion": "Local", "etiqueta": f"vs {a_m} [Local]", "fecha": f_m_str, "cuotas_api": {}})
-                    mapa_eq.setdefault(a_m, {"rival": h_m, "condicion": "Visitante", "etiqueta": f"vs {h_m} [Visitante]", "fecha": f_m_str, "cuotas_api": {}})
+                        for _, r_j in df_jugados.dropna(subset=["_dt_j"]).iterrows():
+                            hj = str(r_j.get("HomeTeam", "")).strip()
+                            aj = str(r_j.get("AwayTeam", "")).strip()
+                            dj = r_j["_dt_j"].date()
+                            if hj and aj:
+                                partidos_jugados_set.add((hj, aj, dj))
 
-            # C) Partidos futuros en BD (FTHG isna) o jornada activa por liga en macro_base_futbol.db
-            if df_scope is not None and not df_scope.empty:
-                df_no_jug = df_scope[df_scope["FTHG"].isna() & df_scope["HomeTeam"].notna() & df_scope["AwayTeam"].notna()].copy()
-                if not df_no_jug.empty:
-                    df_horizonte = df_no_jug.sort_values("Date_Parsed", ascending=True)
-                else:
-                    # Extraer la ventana de la jornada activa más reciente por liga (últimos 4 días de competición)
-                    partes_jornada = []
-                    if col_div_rad and col_div_rad in df_scope.columns:
-                        for _, sub_l in df_scope.groupby(col_div_rad):
-                            max_dt = sub_l["Date_Parsed"].max()
-                            if pd.notna(max_dt):
-                                partes_jornada.append(sub_l[sub_l["Date_Parsed"] >= (max_dt - pd.Timedelta(days=4))])
-                    if partes_jornada:
-                        df_horizonte = pd.concat(partes_jornada, ignore_index=True).sort_values("Date_Parsed", ascending=False)
+                        for eq_u in equipos_universo:
+                            sub_u5 = df_jugados[(df_jugados["HomeTeam"] == eq_u) | (df_jugados["AwayTeam"] == eq_u)].sort_values("_dt_j", ascending=False).head(5)
+                            for _, r_u5 in sub_u5.iterrows():
+                                hu = str(r_u5.get("HomeTeam", "")).strip()
+                                au = str(r_u5.get("AwayTeam", "")).strip()
+                                du = r_u5["_dt_j"].date() if pd.notna(r_u5.get("_dt_j")) else None
+                                if hu and au and du is not None:
+                                    pares_recientes_u5.add((hu, au, du))
+                except Exception as _exc_hist:
+                    st.session_state["radar_hist_warning"] = str(_exc_hist)
+
+                candidatos_futuros = []
+
+                def _registrar_candidato_futuro(h_raw: str, a_raw: str, raw_fecha, mercados_dict: dict | None = None, div_code: str = "", fila_bd=None):
+                    try:
+                        fecha_d, dt_ord, f_fmt = _parsear_fecha_futura_radar(raw_fecha)
+                        # BARRERA CRONOLÓGICA ESTRICTA: descartar inmediatamente si no tiene fecha válida o si fecha < hoy
+                        if fecha_d is None or dt_ord is None or fecha_d < hoy:
+                            return
+                        h_canon = _normalizar_y_emparejar_equipo(h_raw, equipos_universo)
+                        a_canon = _normalizar_y_emparejar_equipo(a_raw, equipos_universo)
+                        if not h_canon or not a_canon or h_canon == a_canon:
+                            return
+                        if equipos_scope_set and (h_canon not in equipos_scope_set and a_canon not in equipos_scope_set):
+                            return
+                        if (h_canon, a_canon, fecha_d) in partidos_jugados_set or (h_canon, a_canon, fecha_d) in pares_recientes_u5:
+                            return
+
+                        candidatos_futuros.append({
+                            "local": h_canon,
+                            "visitante": a_canon,
+                            "fecha_date": fecha_d,
+                            "dt_ord": dt_ord,
+                            "fecha_str": f_fmt,
+                            "cuotas_api": dict(mercados_dict or {}),
+                            "div": str(div_code or ""),
+                            "fila_bd": fila_bd,
+                        })
+                    except Exception:
+                        return
+
+                # 1) Obtención autónoma de próximos partidos en vivo vía conector_odds.py (con caché segura en session_state)
+                try:
+                    mapa_div_sport = {
+                        "SP1": "soccer_spain_la_liga",
+                        "SP2": "soccer_spain_segunda_division",
+                        "E0": "soccer_epl",
+                        "E1": "soccer_efl_champ",
+                        "D1": "soccer_germany_bundesliga",
+                        "I1": "soccer_italy_serie_a",
+                        "F1": "soccer_france_ligue_one",
+                    }
+                    if liga_rad_sel != "Todas las Competiciones":
+                        div_sel_code = MAPA_INV.get(liga_rad_sel, "SP1")
+                        divs_activas_api = [div_sel_code] if div_sel_code in mapa_div_sport else ["SP1"]
                     else:
-                        max_dt_all = df_scope["Date_Parsed"].max()
-                        df_horizonte = (
-                            df_scope[df_scope["Date_Parsed"] >= (max_dt_all - pd.Timedelta(days=4))].sort_values("Date_Parsed", ascending=False)
-                            if pd.notna(max_dt_all)
-                            else pd.DataFrame()
-                        )
+                        divs_activas_api = [d for d in divs_disp_rad if d in mapa_div_sport] or ["SP1", "E0", "D1", "I1", "F1"]
 
-                for _, r_hz in df_horizonte.iterrows():
-                    h_bd = str(r_hz.get("HomeTeam", "")).strip()
-                    a_bd = str(r_hz.get("AwayTeam", "")).strip()
-                    if not h_bd or not a_bd:
+                    if "radar_live_fixtures_cache" not in st.session_state or not isinstance(st.session_state.get("radar_live_fixtures_cache"), dict):
+                        st.session_state["radar_live_fixtures_cache"] = {}
+                    cache_live_ss = st.session_state["radar_live_fixtures_cache"]
+
+                    for d_code in divs_activas_api:
+                        s_key = mapa_div_sport.get(d_code)
+                        if not s_key:
+                            continue
+                        if s_key not in cache_live_ss:
+                            try:
+                                eventos_liga = _obtener_fixtures_vivo_radar(s_key)
+                                cache_live_ss[s_key] = eventos_liga if isinstance(eventos_liga, list) else []
+                            except Exception as _exc_api_call:
+                                st.session_state["radar_api_warning"] = f"Aviso API ({s_key}): {_exc_api_call}"
+                                cache_live_ss[s_key] = []
+                        else:
+                            eventos_liga = cache_live_ss.get(s_key, [])
+
+                        for ev_p in (eventos_liga or []):
+                            try:
+                                if not isinstance(ev_p, dict):
+                                    continue
+                                loc_api = ev_p.get("home_team", "")
+                                vis_api = ev_p.get("away_team", "")
+                                commence_raw = ev_p.get("commence_time", "")
+                                if not loc_api or not vis_api or not commence_raw:
+                                    continue
+
+                                mercados_ev = {}
+                                cuotas_o25, cuotas_btts, cuotas_h, cuotas_a = [], [], [], []
+                                for bm in ev_p.get("bookmakers", []):
+                                    if not isinstance(bm, dict):
+                                        continue
+                                    for mk in bm.get("markets", []):
+                                        if not isinstance(mk, dict):
+                                            continue
+                                        mkey = mk.get("key")
+                                        if mkey == "totals":
+                                            for outc in mk.get("outcomes", []):
+                                                if isinstance(outc, dict) and outc.get("name") == "Over" and outc.get("point") == 2.5:
+                                                    pr = pd.to_numeric(outc.get("price"), errors="coerce")
+                                                    if pd.notna(pr) and pr > 1.01:
+                                                        cuotas_o25.append(float(pr))
+                                        elif mkey == "btts":
+                                            for outc in mk.get("outcomes", []):
+                                                if isinstance(outc, dict) and outc.get("name") == "Yes":
+                                                    pr = pd.to_numeric(outc.get("price"), errors="coerce")
+                                                    if pd.notna(pr) and pr > 1.01:
+                                                        cuotas_btts.append(float(pr))
+                                        elif mkey == "h2h":
+                                            for outc in mk.get("outcomes", []):
+                                                if isinstance(outc, dict):
+                                                    pr = pd.to_numeric(outc.get("price"), errors="coerce")
+                                                    if pd.notna(pr) and pr > 1.01:
+                                                        if outc.get("name") == loc_api:
+                                                            cuotas_h.append(float(pr))
+                                                        elif outc.get("name") == vis_api:
+                                                            cuotas_a.append(float(pr))
+
+                                if cuotas_o25:
+                                    mercados_ev["🔥 Más de 2.5 Goles"] = round(float(np.mean(cuotas_o25)), 2)
+                                if cuotas_btts:
+                                    mercados_ev["🎯 Ambos Marcan (Sí)"] = round(float(np.mean(cuotas_btts)), 2)
+                                if cuotas_h:
+                                    mercados_ev["Victoria Local (1)"] = round(float(np.mean(cuotas_h)), 2)
+                                if cuotas_a:
+                                    mercados_ev["Victoria Visitante (2)"] = round(float(np.mean(cuotas_a)), 2)
+
+                                _registrar_candidato_futuro(loc_api, vis_api, commence_raw, mercados_ev, div_code=d_code)
+                            except Exception:
+                                continue
+                except Exception as _exc_live_block:
+                    st.session_state["radar_api_warning"] = f"Aviso en sincronización de calendario en vivo: {_exc_live_block}"
+
+                # 2) Cruce con caché de oportunidades del Escáner EV+ (si existe en sesión y supera fecha >= hoy)
+                try:
+                    df_ops_cache = st.session_state.get("df_ops_export")
+                    if isinstance(df_ops_cache, pd.DataFrame) and not df_ops_cache.empty and "Partido" in df_ops_cache.columns:
+                        agrup_ops = {}
+                        for _, r_op in df_ops_cache.iterrows():
+                            p_txt = str(r_op.get("Partido", ""))
+                            if " vs " in p_txt:
+                                h_op, a_op = [x.strip() for x in p_txt.split(" vs ", 1)]
+                                f_op = r_op.get("Fecha / Hora", "")
+                                m_op = str(r_op.get("Mercado", ""))
+                                c_op = pd.to_numeric(r_op.get("Cuota"), errors="coerce")
+                                agrup_ops.setdefault((h_op, a_op, str(f_op)), {})
+                                if pd.notna(c_op) and c_op > 1.01:
+                                    agrup_ops[(h_op, a_op, str(f_op))][m_op] = float(c_op)
+                        for (h_op, a_op, f_op_str), mercs_op in agrup_ops.items():
+                            _registrar_candidato_futuro(h_op, a_op, f_op_str, mercs_op)
+                except Exception:
+                    pass
+
+                # 3) Fixtures manuales cargados en sesión (solo si fecha >= hoy)
+                try:
+                    for fx_m in st.session_state.get("ev_fix_manual", []):
+                        if isinstance(fx_m, dict):
+                            _registrar_candidato_futuro(
+                                fx_m.get("Local", ""),
+                                fx_m.get("Visitante", ""),
+                                fx_m.get("Fecha"),
+                                {},
+                                div_code=str(fx_m.get("Div", "")),
+                            )
+                except Exception:
+                    pass
+
+                # 4) Partidos programados sin disputar en BD (estrictamente FTHG.isna() y fecha >= hoy)
+                try:
+                    if df_scope is not None and not df_scope.empty and "FTHG" in df_scope.columns:
+                        col_fecha_bd = "Date_Parsed" if "Date_Parsed" in df_scope.columns else ("Date" if "Date" in df_scope.columns else None)
+                        if col_fecha_bd:
+                            df_no_jug = df_scope[
+                                df_scope["FTHG"].isna()
+                                & df_scope["HomeTeam"].notna()
+                                & df_scope["AwayTeam"].notna()
+                                & df_scope[col_fecha_bd].notna()
+                            ].copy()
+                            for _, r_hz in df_no_jug.iterrows():
+                                _registrar_candidato_futuro(
+                                    str(r_hz.get("HomeTeam", "")),
+                                    str(r_hz.get("AwayTeam", "")),
+                                    r_hz.get(col_fecha_bd),
+                                    {},
+                                    div_code=str(r_hz.get(col_div_rad, "")) if col_div_rad else "",
+                                    fila_bd=r_hz,
+                                )
+                except Exception:
+                    pass
+
+                # Ordenar cronológicamente (commence_time ascendente) para enlazar a cada equipo con su próximo partido inmediato
+                candidatos_futuros.sort(key=lambda x: x["dt_ord"])
+
+                for cand in candidatos_futuros:
+                    try:
+                        h_c = cand["local"]
+                        a_c = cand["visitante"]
+                        f_str = cand["fecha_str"]
+                        cuotas_c = cand["cuotas_api"]
+
+                        es_inmediato_h = h_c not in mapa_eq
+                        es_inmediato_a = a_c not in mapa_eq
+
+                        if es_inmediato_h:
+                            mapa_eq[h_c] = {
+                                "rival": a_c,
+                                "condicion": "Local",
+                                "etiqueta": f"vs {a_c} [Local]",
+                                "fecha": f_str,
+                                "fila_bd": cand.get("fila_bd"),
+                                "cuotas_api": cuotas_c,
+                            }
+                        elif cuotas_c and not mapa_eq[h_c].get("cuotas_api") and mapa_eq[h_c].get("rival") == a_c:
+                            mapa_eq[h_c]["cuotas_api"] = cuotas_c
+
+                        if es_inmediato_a:
+                            mapa_eq[a_c] = {
+                                "rival": h_c,
+                                "condicion": "Visitante",
+                                "etiqueta": f"vs {h_c} [Visitante]",
+                                "fecha": f_str,
+                                "fila_bd": cand.get("fila_bd"),
+                                "cuotas_api": cuotas_c,
+                            }
+                        elif cuotas_c and not mapa_eq[a_c].get("cuotas_api") and mapa_eq[a_c].get("rival") == h_c:
+                            mapa_eq[a_c]["cuotas_api"] = cuotas_c
+
+                        if (es_inmediato_h or es_inmediato_a) and (h_c, a_c) not in vistos_duelos:
+                            vistos_duelos.add((h_c, a_c))
+                            lista_duelos.append({
+                                "local": h_c,
+                                "visitante": a_c,
+                                "fecha": f_str,
+                                "div": cand["div"],
+                            })
+                    except Exception:
                         continue
-                    f_bd = str(r_hz.get("Date", "")).strip() or "Jornada Activa"
-                    div_bd = str(r_hz.get(col_div_rad, "")) if col_div_rad else ""
-                    if h_bd not in mapa_eq:
-                        mapa_eq[h_bd] = {
-                            "rival": a_bd,
-                            "condicion": "Local",
-                            "etiqueta": f"vs {a_bd} [Local]",
-                            "fecha": f_bd,
-                            "fila_bd": r_hz,
-                            "cuotas_api": {},
-                        }
-                    if a_bd not in mapa_eq:
-                        mapa_eq[a_bd] = {
-                            "rival": h_bd,
-                            "condicion": "Visitante",
-                            "etiqueta": f"vs {h_bd} [Visitante]",
-                            "fecha": f_bd,
-                            "fila_bd": r_hz,
-                            "cuotas_api": {},
-                        }
-                    if (h_bd, a_bd) not in vistos_duelos:
-                        vistos_duelos.add((h_bd, a_bd))
-                        lista_duelos.append({"local": h_bd, "visitante": a_bd, "fecha": f_bd, "div": div_bd})
+            except Exception as _exc_horiz:
+                st.session_state["radar_horizon_warning"] = f"Aviso en motor de horizonte: {_exc_horiz}"
+                return {}, []
 
             return mapa_eq, lista_duelos
 
@@ -5078,8 +5698,18 @@ elif menu_seleccionado == "🎯 Radar de Tendencias":
             st.markdown(html_tabla, unsafe_allow_html=True)
 
         # ── Construcción del Mapa de Próximos Partidos y Escaneo de Equipos ───
-        mapa_fixtures, duelos_horizonte = _construir_horizonte_fixtures_y_cuotas(df_rad)
-        equipos_rad = sorted(pd.concat([df_rad["HomeTeam"], df_rad["AwayTeam"]]).dropna().unique().tolist())
+        try:
+            mapa_fixtures, duelos_horizonte = _construir_horizonte_fixtures_y_cuotas(df_rad)
+        except Exception as _exc_call_hz:
+            st.session_state["radar_horizon_warning"] = str(_exc_call_hz)
+            mapa_fixtures, duelos_horizonte = {}, []
+
+        try:
+            equipos_rad = sorted(
+                pd.concat([df_rad["HomeTeam"], df_rad["AwayTeam"]]).dropna().astype(str).unique().tolist()
+            ) if (not df_rad.empty and {"HomeTeam", "AwayTeam"}.issubset(df_rad.columns)) else []
+        except Exception:
+            equipos_rad = []
 
         CATALOGO_MERCADOS_RADAR = [
             ("OVER25", "🔥 Más de 2.5 Goles"),
@@ -5095,67 +5725,74 @@ elif menu_seleccionado == "🎯 Radar de Tendencias":
         indice_racha_visit = {k: {} for k, _ in CATALOGO_MERCADOS_RADAR}
 
         for eq in equipos_rad:
-            df_eq_all = df_rad[(df_rad["HomeTeam"] == eq) | (df_rad["AwayTeam"] == eq)].sort_values(by="Date_Parsed", ascending=False)
-            df_eq_loc = df_rad[df_rad["HomeTeam"] == eq].sort_values(by="Date_Parsed", ascending=False)
-            df_eq_vis = df_rad[df_rad["AwayTeam"] == eq].sort_values(by="Date_Parsed", ascending=False)
+            try:
+                df_eq_all = df_rad[(df_rad["HomeTeam"] == eq) | (df_rad["AwayTeam"] == eq)].sort_values(by="Date_Parsed", ascending=False)
+                df_eq_loc = df_rad[df_rad["HomeTeam"] == eq].sort_values(by="Date_Parsed", ascending=False)
+                df_eq_vis = df_rad[df_rad["AwayTeam"] == eq].sort_values(by="Date_Parsed", ascending=False)
 
-            if "Local" in filtro_condicion:
-                u5_activo = df_eq_loc.head(5)
-            elif "Visitante" in filtro_condicion:
-                u5_activo = df_eq_vis.head(5)
-            else:
-                u5_activo = df_eq_all.head(5)
+                if "Local" in filtro_condicion:
+                    u5_activo = df_eq_loc.head(5)
+                elif "Visitante" in filtro_condicion:
+                    u5_activo = df_eq_vis.head(5)
+                else:
+                    u5_activo = df_eq_all.head(5)
 
-            div_eq_val = (
-                str(df_eq_all[col_div_rad].dropna().iloc[0])
-                if col_div_rad and not df_eq_all.empty and not df_eq_all[col_div_rad].dropna().empty
-                else "SP1"
-            )
-            liga_eq_nom = MAPA_LIGAS.get(div_eq_val, div_eq_val)
-            info_fix_eq = mapa_fixtures.get(eq)
+                div_eq_val = (
+                    str(df_eq_all[col_div_rad].dropna().iloc[0])
+                    if col_div_rad and not df_eq_all.empty and not df_eq_all[col_div_rad].dropna().empty
+                    else "SP1"
+                )
+                liga_eq_nom = MAPA_LIGAS.get(div_eq_val, div_eq_val)
+                info_fix_eq = mapa_fixtures.get(eq)
 
-            for m_key, _ in CATALOGO_MERCADOS_RADAR:
-                # 1) Evaluación según filtro activo para las pestañas
-                ev_act = _evaluar_racha_equipo_mercado(u5_activo, eq, m_key, info_fix_eq, liga_eq_nom)
-                if ev_act and ev_act["Aciertos_Num"] >= umbral_racha:
-                    resultados_por_mercado[m_key].append(ev_act)
+                for m_key, _ in CATALOGO_MERCADOS_RADAR:
+                    # 1) Evaluación según filtro activo para las pestañas
+                    ev_act = _evaluar_racha_equipo_mercado(u5_activo, eq, m_key, info_fix_eq, liga_eq_nom)
+                    if ev_act and ev_act["Aciertos_Num"] >= umbral_racha:
+                        resultados_por_mercado[m_key].append(ev_act)
 
-                # 2) Evaluación específica Local / Visitante para el motor de Doble Coincidencia
-                u5_h_conv = df_eq_loc.head(5) if len(df_eq_loc) >= 3 else df_eq_all.head(5)
-                u5_a_conv = df_eq_vis.head(5) if len(df_eq_vis) >= 3 else df_eq_all.head(5)
-                ev_h = _evaluar_racha_equipo_mercado(u5_h_conv, eq, m_key, info_fix_eq, liga_eq_nom)
-                ev_a = _evaluar_racha_equipo_mercado(u5_a_conv, eq, m_key, info_fix_eq, liga_eq_nom)
-                if ev_h and ev_h["Aciertos_Num"] >= umbral_racha:
-                    indice_racha_local[m_key][eq] = ev_h
-                if ev_a and ev_a["Aciertos_Num"] >= umbral_racha:
-                    indice_racha_visit[m_key][eq] = ev_a
+                    # 2) Evaluación específica Local / Visitante para el motor de Doble Coincidencia
+                    u5_h_conv = df_eq_loc.head(5) if len(df_eq_loc) >= 3 else df_eq_all.head(5)
+                    u5_a_conv = df_eq_vis.head(5) if len(df_eq_vis) >= 3 else df_eq_all.head(5)
+                    ev_h = _evaluar_racha_equipo_mercado(u5_h_conv, eq, m_key, info_fix_eq, liga_eq_nom)
+                    ev_a = _evaluar_racha_equipo_mercado(u5_a_conv, eq, m_key, info_fix_eq, liga_eq_nom)
+                    if ev_h and ev_h["Aciertos_Num"] >= umbral_racha:
+                        indice_racha_local[m_key][eq] = ev_h
+                    if ev_a and ev_a["Aciertos_Num"] >= umbral_racha:
+                        indice_racha_visit[m_key][eq] = ev_a
+            except Exception as _exc_eq_scan:
+                st.session_state["radar_scan_warning"] = str(_exc_eq_scan)
+                continue
 
         # ── PILAR 3: DOUBLE-CONVERGENCE RADAR ("CHOQUE DE RACHAS" ENGINE) ─────
         choques_detectados = []
         for duelo in duelos_horizonte:
-            eq_h = duelo["local"]
-            eq_a = duelo["visitante"]
-            fecha_d = duelo["fecha"]
-            for m_key, m_label in CATALOGO_MERCADOS_RADAR:
-                r_h = indice_racha_local[m_key].get(eq_h)
-                r_a = indice_racha_visit[m_key].get(eq_a)
-                if r_h and r_a:
-                    wr_comb = round((r_h["Winrate_Num"] + r_a["Winrate_Num"]) / 2.0, 1)
-                    cj_comb = round(1.0 / max(wr_comb / 100.0, 0.01), 2)
-                    cm_comb = round((r_h["Cuota_Mercado"] + r_a["Cuota_Mercado"]) / 2.0, 2)
-                    ev_comb = round(((cm_comb / cj_comb) - 1.0) * 100.0, 1)
-                    choques_detectados.append({
-                        "partido": f"{eq_h} vs {eq_a}",
-                        "liga": r_h["Liga"],
-                        "fecha": fecha_d,
-                        "mercado": m_label,
-                        "racha_local": r_h,
-                        "racha_visit": r_a,
-                        "wr_comb": wr_comb,
-                        "cuota_justa": cj_comb,
-                        "cuota_mercado": cm_comb,
-                        "ev_comb": ev_comb,
-                    })
+            try:
+                eq_h = duelo["local"]
+                eq_a = duelo["visitante"]
+                fecha_d = duelo["fecha"]
+                for m_key, m_label in CATALOGO_MERCADOS_RADAR:
+                    r_h = indice_racha_local[m_key].get(eq_h)
+                    r_a = indice_racha_visit[m_key].get(eq_a)
+                    if r_h and r_a:
+                        wr_comb = round((r_h["Winrate_Num"] + r_a["Winrate_Num"]) / 2.0, 1)
+                        cj_comb = round(1.0 / max(wr_comb / 100.0, 0.01), 2)
+                        cm_comb = round((r_h["Cuota_Mercado"] + r_a["Cuota_Mercado"]) / 2.0, 2)
+                        ev_comb = round(((cm_comb / cj_comb) - 1.0) * 100.0, 1)
+                        choques_detectados.append({
+                            "partido": f"{eq_h} vs {eq_a}",
+                            "liga": r_h["Liga"],
+                            "fecha": fecha_d,
+                            "mercado": m_label,
+                            "racha_local": r_h,
+                            "racha_visit": r_a,
+                            "wr_comb": wr_comb,
+                            "cuota_justa": cj_comb,
+                            "cuota_mercado": cm_comb,
+                            "ev_comb": ev_comb,
+                        })
+            except Exception:
+                continue
 
         choques_detectados.sort(key=lambda x: (x["wr_comb"], x["ev_comb"]), reverse=True)
 
@@ -6172,12 +6809,15 @@ elif menu_seleccionado == "🤖 Asistente IA Local":
     import os
     try:
         from google import genai
-        from google.genai import types as genai_types
         _GENAI_SDK_OK = True
     except Exception:
         genai = None
-        genai_types = None
         _GENAI_SDK_OK = False
+
+    try:
+        from google.genai import types as genai_types
+    except Exception:
+        genai_types = None
 
     st.title("🤖 Asistente Cuantitativo de Élite (Google AI Studio)")
     st.caption(
