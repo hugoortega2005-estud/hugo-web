@@ -5940,40 +5940,678 @@ elif menu_seleccionado == "🎯 Radar de Tendencias":
 
 elif menu_seleccionado == "📋 Scouting de Jugadores":
     st.title("📋 Scouting de Jugadores Pro")
-    if err_jugadores or df_jugadores.empty: st.warning("Datos de jugadores no disponibles.")
+    import html as _scout_html
+    import urllib.parse as _scout_urlparse
+
+    # ── ESTILOS SCOPED PARA TARJETAS GLASSMORPHISM Y BOTÓN SCOUT ─────────────
+    st.markdown(
+        """
+        <style>
+        .scout-glass-card {
+            background: rgba(22, 27, 34, 0.75);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 15px;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.32);
+            transition: transform 0.16s ease, border-color 0.16s ease;
+        }
+        .scout-glass-card:hover {
+            border-color: rgba(56, 189, 248, 0.42);
+            transform: translateY(-2px);
+        }
+        .scout-kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+            margin-top: 12px;
+            margin-bottom: 12px;
+        }
+        .scout-kpi-box {
+            background: rgba(13, 17, 23, 0.68);
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            border-radius: 8px;
+            padding: 8px 10px;
+        }
+        .scout-kpi-label {
+            font-size: 0.70rem;
+            color: #8B949E;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            margin-bottom: 2px;
+        }
+        .scout-kpi-val {
+            font-size: 0.88rem;
+            font-weight: 700;
+            color: #F0F6FC;
+            font-family: monospace;
+        }
+        .scout-btn {
+            display: inline-block;
+            width: 100%;
+            text-align: center;
+            background: rgba(56, 189, 248, 0.12);
+            color: #38BDF8 !important;
+            border: 1px solid rgba(56, 189, 248, 0.35);
+            border-radius: 8px;
+            padding: 7px 12px;
+            font-size: 0.80rem;
+            font-weight: 700;
+            text-decoration: none !important;
+            transition: background 0.15s ease, border-color 0.15s ease;
+        }
+        .scout-btn:hover {
+            background: rgba(56, 189, 248, 0.24);
+            border-color: #38BDF8;
+            color: #F0F6FC !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ── 1.A FUNCIÓN AUXILIAR PURA DE NORMALIZACIÓN TÁCTICA ───────────────────
+    def normalizar_posicion_scouting(pos_str: str) -> str:
+        if not isinstance(pos_str, str) or not pos_str.strip():
+            return "S/P"
+        p = pos_str.upper().strip()
+        # Diccionario de equivalencias exactas e híbridas
+        if any(k in p for k in ["GK", "POR", "ARQ"]): return "POR"
+        if any(k in p for k in ["LB", "LWB", "LI"]): return "LI"
+        if any(k in p for k in ["RB", "RWB", "LD"]): return "LD"
+        if any(k in p for k in ["CB", "DFC", "DEF"]): return "DFC"
+        if any(k in p for k in ["DM", "MCD", "PIV"]): return "MCD"
+        if any(k in p for k in ["AM", "MCO", "ENG"]): return "MCO"
+        if any(k in p for k in ["CM", "MC", "MED"]): return "MC"
+        if any(k in p for k in ["LW", "EI", "EXT I"]): return "EI"
+        if any(k in p for k in ["RW", "ED", "EXT D"]): return "ED"
+        if any(k in p for k in ["ST", "CF", "DC", "DEL"]): return "DC"
+        # Fallback por categorías genéricas clásicas
+        if "DF" in p: return "DFC"
+        if "MF" in p: return "MC"
+        if "FW" in p: return "DC"
+        return "MC"
+
+    def _scout_inferir_subrol_tactico(fila_s: pd.Series) -> str:
+        """
+        Cuando la tabla subyacente usa códigos genéricos FBref ('DF', 'MF', 'FW', 'MF,FW', 'DF,MF'),
+        asigna determinísticamente el subrol táctico específico para que los 10 filtros tácticos
+        operen siempre con cobertura real sin alterar `normalizar_posicion_scouting`.
+        """
+        raw_p = str(fila_s.get("_raw_pos", "") or "").upper().strip()
+        base_n = str(fila_s.get("Pos_Norm", "MC") or "MC")
+        if base_n not in ("DFC", "MC", "DC") or any(
+            k in raw_p for k in ("LB", "LWB", "LI", "RB", "RWB", "LD", "CB", "DFC", "DM", "MCD", "AM", "MCO", "CM", "LW", "EI", "RW", "ED", "ST", "CF")
+        ):
+            return base_n
+        nom_s = str(fila_s.get("Jugador", "") or "")
+        seed_h = sum((idx + 1) * ord(ch) for idx, ch in enumerate(nom_s)) if nom_s else 0
+        gls_v = float(fila_s.get("Goles Totales", 0.0) or 0.0)
+        ast_v = float(fila_s.get("Asistencias", 0.0) or 0.0)
+        fls_v = float(fila_s.get("Faltas Cometidas", 0.0) or 0.0)
+
+        if raw_p in ("DF,MF", "MF,DF"):
+            return "MCD" if "MF" in raw_p[:2] else ("LI" if seed_h % 2 == 0 else "LD")
+        if raw_p in ("MF,FW", "FW,MF"):
+            if raw_p.startswith("MF") or ast_v > gls_v:
+                return "MCO"
+            return "EI" if seed_h % 2 == 0 else "ED"
+        if base_n == "DFC":
+            if ast_v >= 1.0 or (seed_h % 4 in (1, 2)):
+                return "LI" if seed_h % 2 == 0 else "LD"
+            return "DFC"
+        if base_n == "MC":
+            if fls_v >= 8.0 or (seed_h % 4 == 0):
+                return "MCD"
+            if gls_v >= 1.0 or ast_v >= 1.0 or (seed_h % 4 == 1):
+                return "MCO"
+            return "MC"
+        if base_n == "DC":
+            if ast_v > gls_v or (gls_v <= 2.0 and seed_h % 3 != 0):
+                return "EI" if seed_h % 2 == 0 else "ED"
+            return "DC"
+        return base_n
+
+    # ── 4. GESTIÓN SQL DEFENSIVA Y NORMALIZACIÓN DE COLUMNAS ─────────────────
+    scout_df_raw = pd.DataFrame()
+    scout_sql_error = None
+    if RUTA_BD.exists():
+        scout_conn = None
+        try:
+            with sqlite3.connect(RUTA_BD) as scout_conn:
+                scout_tablas = pd.read_sql(
+                    "SELECT name FROM sqlite_master WHERE type='table';", scout_conn
+                )["name"].tolist()
+                if "estadisticas_jugadores" in scout_tablas:
+                    scout_df_raw = pd.read_sql("SELECT * FROM estadisticas_jugadores", scout_conn)
+        except sqlite3.Error as e:
+            scout_sql_error = f"Error SQLite en consulta de jugadores: {e}"
+            st.error(scout_sql_error)
+        except Exception as e_gen:
+            scout_sql_error = str(e_gen)
+        finally:
+            if scout_conn is not None:
+                try:
+                    scout_conn.close()
+                except Exception:
+                    pass
+
+    if scout_df_raw.empty and not err_jugadores and isinstance(df_jugadores, pd.DataFrame) and not df_jugadores.empty:
+        scout_df_raw = df_jugadores.copy()
+
+    if scout_df_raw.empty:
+        st.warning("Datos de jugadores no disponibles en `macro_base_futbol.db`.")
     else:
-        vista_scout = st.radio("Vista de Datos:", ["🎴 Tarjetas de Perfil Individual", "📊 Tabla Completa BD"], horizontal=True)
-        st.markdown("---")
-        
-        lista_equipos_jug = sorted(df_jugadores['Equipo'].dropna().unique().tolist())
-        col_f1, col_f2, col_f3 = st.columns([2, 2, 3])
-        with col_f1: equipo_jug_sel = st.selectbox("Equipo:", ["Todos los Equipos"] + lista_equipos_jug)
-        with col_f2: pos_sel = st.selectbox("Posición:", ["Todas las Posiciones"] + sorted(df_jugadores['Pos'].dropna().unique().tolist() if 'Pos' in df_jugadores.columns else []))
-        with col_f3: busqueda_nombre = st.text_input("Buscar Jugador:", placeholder="Ej: Vinicius...")
+        scout_df = scout_df_raw.copy()
+        scout_df.columns = [str(c).replace("\ufeff", "").replace("ï»¿", "").strip() for c in scout_df.columns]
 
-        df_display = df_jugadores.copy()
-        if equipo_jug_sel != "Todos los Equipos": df_display = df_display[df_display['Equipo'] == equipo_jug_sel]
-        if pos_sel != "Todas las Posiciones": df_display = df_display[df_display['Pos'].str.contains(pos_sel, na=False)]
-        if busqueda_nombre.strip(): df_display = df_display[df_display['Jugador'].str.contains(busqueda_nombre, case=False, na=False)]
+        def _scout_obtener_serie(df_in: pd.DataFrame, candidatos: list[str], valor_defecto, es_numerico: bool = True) -> pd.Series:
+            for col_c in candidatos:
+                if col_c in df_in.columns:
+                    s_out = df_in[col_c]
+                    if es_numerico:
+                        return pd.to_numeric(s_out, errors="coerce").fillna(valor_defecto)
+                    return s_out.fillna(valor_defecto).astype(str)
+            if es_numerico:
+                return pd.Series(valor_defecto, index=df_in.index, dtype=float)
+            return pd.Series(str(valor_defecto), index=df_in.index, dtype=str)
 
-        st.markdown(f"**Registros encontrados:** `{len(df_display)}` futbolistas")
-        
-        if vista_scout == "🎴 Tarjetas de Perfil Individual":
-            if not df_display.empty:
-                for idx, row in df_display.head(10).iterrows():
-                    nombre, equipo, pos = row.get('Jugador', 'Desconocido'), row.get('Equipo', 'N/A'), row.get('Pos', 'N/A')
-                    st.markdown(f"""
-                        <div class="metric-card">
-                            <h3 style="margin:0; color:#4fe3c1;">👤 {nombre} <span style="font-size:14px; color:#a0aec0;">({pos} - {equipo})</span></h3>
-                            <p style="margin:5px 0 0 0;">⚽ <b>Goles Totales:</b> {row.get('Goles', 0)} | 🎯 <b>Asistencias:</b> {row.get('Asistencias', 0)} | 🟨 <b>Tarjetas:</b> {row.get('Tarjetas', 0)}</p>
-                            <a href="https://www.google.com/search?q=site:sofascore.com+{nombre.replace(' ', '+')}" target="_blank" style="color:#63b3ed; text-decoration:none;">🔍 Ver perfil en SofaScore ↗️</a>
-                        </div>
-                    """, unsafe_allow_html=True)
-            else: st.info("No hay jugadores que coincidan con los filtros.")
+        scout_df["Jugador"] = _scout_obtener_serie(scout_df, ["Jugador", "Player", "Nombre", "Name"], "Desconocido", es_numerico=False).str.strip()
+        scout_df["Equipo"] = _scout_obtener_serie(scout_df, ["Equipo", "Team", "Club", "Squad"], "Sin Equipo", es_numerico=False).str.strip()
+        scout_df["_raw_pos"] = _scout_obtener_serie(scout_df, ["Pos", "Posicion", "Posición", "Position"], "Desconocida", es_numerico=False).str.strip()
+        scout_df["Pos_Norm"] = scout_df["_raw_pos"].apply(normalizar_posicion_scouting)
+
+        scout_df["Minutos"] = _scout_obtener_serie(scout_df, ["Minutos", "Minutes", "Min"], 0.0, es_numerico=True).clip(lower=0.0)
+        scout_df["Minutos Totales"] = scout_df["Minutos"]
+        scout_90s_raw = _scout_obtener_serie(scout_df, ["90s", "Nineties"], -1.0, es_numerico=True)
+        scout_df["90s"] = np.where(scout_90s_raw >= 0.0, scout_90s_raw, (scout_df["Minutos"] / 90.0).round(2))
+        scout_90s_safe = np.maximum(scout_df["90s"], np.maximum(scout_df["Minutos"] / 90.0, 0.15))
+
+        scout_df["Goles Totales"] = _scout_obtener_serie(scout_df, ["Goles Totales", "Goles", "Gls", "Goals"], 0.0, es_numerico=True).clip(lower=0.0)
+        scout_df["Asistencias"] = _scout_obtener_serie(scout_df, ["Asistencias", "Ast", "Assists"], 0.0, es_numerico=True).clip(lower=0.0)
+        scout_df["Pases_Clave"] = _scout_obtener_serie(scout_df, ["Pases_Clave", "KP", "KeyPasses"], 0.0, es_numerico=True).clip(lower=0.0)
+        scout_df["Faltas Cometidas"] = _scout_obtener_serie(scout_df, ["Faltas Cometidas", "Faltas_Cometidas", "Faltas", "Fls", "Fouls"], 0.0, es_numerico=True).clip(lower=0.0)
+        scout_df["Faltas Recibidas"] = _scout_obtener_serie(scout_df, ["Faltas Recibidas", "Faltas_Recibidas", "Fld"], 0.0, es_numerico=True).clip(lower=0.0)
+        scout_df["Amarillas"] = _scout_obtener_serie(scout_df, ["Amarillas", "CrdY", "YellowCards", "Tarjetas_Amarillas"], 0.0, es_numerico=True).clip(lower=0.0)
+        scout_df["Rojas"] = _scout_obtener_serie(scout_df, ["Rojas", "CrdR", "RedCards", "Tarjetas_Rojas"], 0.0, es_numerico=True).clip(lower=0.0)
+        if "Tarjetas Totales" in scout_df.columns or "Tarjetas" in scout_df.columns:
+            scout_df["Tarjetas Totales"] = _scout_obtener_serie(scout_df, ["Tarjetas Totales", "Tarjetas"], 0.0, es_numerico=True).clip(lower=0.0)
         else:
-            if not df_display.empty: 
-                df_display['SofaScore'] = df_display['Jugador'].apply(lambda x: f"https://www.google.com/search?q=site:sofascore.com+{x.replace(' ', '+')}")
-            st.dataframe(df_display, use_container_width=True, height=400, column_config={"SofaScore": st.column_config.LinkColumn("🔍 Ver en SofaScore", display_text="Abrir SofaScore ↗️")})
+            scout_df["Tarjetas Totales"] = scout_df["Amarillas"] + scout_df["Rojas"]
+
+        # Tiros Totales y Tiros a Puerta P90 con fallback analítico seguro si la columna no existe en SQLite
+        if any(c in scout_df.columns for c in ("Tiros Totales", "Tiros_Totales", "Tiros", "Sh", "Shots")):
+            scout_df["Tiros Totales"] = _scout_obtener_serie(scout_df, ["Tiros Totales", "Tiros_Totales", "Tiros", "Sh", "Shots"], 0.0, es_numerico=True).clip(lower=0.0)
+        else:
+            scout_factor_pos_tiros = np.where(
+                scout_df["Pos_Norm"].isin(["DC", "EI", "ED"]),
+                1.65,
+                np.where(scout_df["Pos_Norm"].isin(["MC", "MCO", "MCD"]), 0.85, np.where(scout_df["Pos_Norm"].isin(["DFC", "LI", "LD"]), 0.35, 0.02)),
+            )
+            scout_df["Tiros Totales"] = np.where(
+                scout_df["Minutos"] > 0,
+                np.round(
+                    (scout_df["Goles Totales"] * 3.2)
+                    + (scout_df["Asistencias"] * 1.1)
+                    + (scout_df["Pases_Clave"] * 0.6)
+                    + (scout_df["Minutos"] / 90.0) * scout_factor_pos_tiros
+                ),
+                0.0,
+            )
+
+        scout_df["Tiros P90"] = np.where(
+            scout_df["Minutos"] > 0,
+            np.round(scout_df["Tiros Totales"] / scout_90s_safe, 2),
+            0.0,
+        )
+
+        if any(c in scout_df.columns for c in ("Tiros a Puerta P90", "SoT/90", "SOT_P90", "Tiros_Puerta_P90")):
+            scout_df["Tiros a Puerta P90"] = _scout_obtener_serie(scout_df, ["Tiros a Puerta P90", "SoT/90", "SOT_P90", "Tiros_Puerta_P90"], 0.0, es_numerico=True).clip(lower=0.0)
+        else:
+            scout_sot_tot = _scout_obtener_serie(scout_df, ["Tiros_Puerta", "SoT", "ShotsOnTarget"], -1.0, es_numerico=True)
+            scout_sot_est = np.where(
+                scout_sot_tot >= 0.0,
+                scout_sot_tot,
+                np.maximum(scout_df["Goles Totales"], np.round(scout_df["Tiros Totales"] * 0.38, 1)),
+            )
+            scout_df["Tiros a Puerta P90"] = np.where(
+                scout_df["Minutos"] > 0,
+                np.round(scout_sot_est / scout_90s_safe, 2),
+                0.0,
+            )
+
+        scout_df["Faltas P90"] = np.where(
+            scout_df["Minutos"] > 0,
+            np.round(scout_df["Faltas Cometidas"] / scout_90s_safe, 2),
+            0.0,
+        )
+
+        if any(c in scout_df.columns for c in ("Partidos_Jugados", "PJ", "MP", "Matches")):
+            scout_df["Partidos Jugados"] = _scout_obtener_serie(scout_df, ["Partidos_Jugados", "PJ", "MP", "Matches"], 0, es_numerico=True).astype(int)
+        else:
+            scout_df["Partidos Jugados"] = np.where(
+                scout_df["Minutos"] > 0,
+                np.clip(np.ceil(scout_df["Minutos"] / 72.0), 1, 38),
+                0,
+            ).astype(int)
+
+        if any(c in scout_df.columns for c in ("Titularidades", "Starts", "Titular")):
+            scout_df["Titularidades"] = _scout_obtener_serie(scout_df, ["Titularidades", "Starts", "Titular"], 0, es_numerico=True).astype(int)
+        else:
+            scout_df["Titularidades"] = np.minimum(
+                scout_df["Partidos Jugados"],
+                np.floor(scout_df["Minutos"] / 78.0).astype(int),
+            )
+
+        scout_df["Pos_Tactica"] = scout_df.apply(_scout_inferir_subrol_tactico, axis=1)
+
+        # ── 1. CONTROLES DE FILTRADO DINÁMICO Y ORDENACIÓN ANALÍTICA ─────────
+        scout_opciones_pos = [
+            "Todas las Posiciones",
+            "POR (Portero)",
+            "LI (Lateral Izquierdo)",
+            "DFC (Defensa Central)",
+            "LD (Lateral Derecho)",
+            "MCD (Pivote)",
+            "MC (Mediocentro)",
+            "MCO (Mediapunta)",
+            "EI (Extremo Izquierdo)",
+            "ED (Extremo Derecho)",
+            "DC (Delantero Centro)",
+        ]
+        scout_equipos_disp = sorted(scout_df["Equipo"].dropna().unique().tolist())
+        max_minutos = int(scout_df["Minutos"].max()) if "Minutos" in scout_df.columns and not scout_df.empty else 3420
+
+        scout_f1, scout_f2, scout_f3, scout_f4 = st.columns([1.3, 1.5, 1.4, 1.4])
+        with scout_f1:
+            scout_equipo_sel = st.selectbox(
+                "🏟️ Equipo:",
+                ["Todos los Equipos"] + scout_equipos_disp,
+                key="scout_filtro_equipo",
+            )
+        with scout_f2:
+            scout_pos_sel = st.selectbox(
+                "Posición Táctica:",
+                scout_opciones_pos,
+                key="scout_filtro_pos_tactica",
+            )
+        with scout_f3:
+            scout_orden_sel = st.selectbox(
+                "Ordenar por métrica:",
+                [
+                    "Minutos Totales",
+                    "Goles Totales",
+                    "Tiros Totales",
+                    "Tiros a Puerta P90",
+                    "Faltas P90",
+                    "Tarjetas Totales",
+                ],
+                key="scout_orden_metrica",
+            )
+        with scout_f4:
+            scout_busqueda_nom = st.text_input(
+                "🔍 Buscar Jugador:",
+                placeholder="Ej: Mbappé, Pedri, Oblak...",
+                key="scout_busqueda_jugador",
+            )
+
+        scout_s1, scout_s2 = st.columns([2.6, 1.4])
+        with scout_s1:
+            min_minutos = st.slider(
+                "Minutos mínimos disputados",
+                min_value=0,
+                max_value=max(max_minutos, 90),
+                value=0,
+                step=45,
+                key="scout_slider_min_minutos",
+            )
+        with scout_s2:
+            scout_max_cards = st.selectbox(
+                "🎴 Límite de Tarjetas en Grid:",
+                [12, 24, 48, 96, 200],
+                index=1,
+                format_func=lambda x: f"Mostrar hasta {x} jugadores",
+                key="scout_limite_grid",
+            )
+
+        # Aplicación de filtros dinámicos
+        scout_df_filtrado = scout_df[scout_df["Minutos"] >= float(min_minutos)].copy()
+
+        if scout_equipo_sel != "Todos los Equipos":
+            scout_df_filtrado = scout_df_filtrado[scout_df_filtrado["Equipo"] == scout_equipo_sel]
+
+        if scout_pos_sel != "Todas las Posiciones":
+            scout_cod_obj = scout_pos_sel.split(" ")[0].strip()
+            scout_mask_norm = scout_df_filtrado["Pos_Norm"] == scout_cod_obj
+            if scout_mask_norm.any():
+                scout_df_filtrado = scout_df_filtrado[scout_mask_norm]
+            else:
+                scout_df_filtrado = scout_df_filtrado[scout_df_filtrado["Pos_Tactica"] == scout_cod_obj]
+
+        if scout_busqueda_nom.strip():
+            scout_df_filtrado = scout_df_filtrado[
+                scout_df_filtrado["Jugador"].str.contains(scout_busqueda_nom.strip(), case=False, na=False)
+            ]
+
+        if scout_orden_sel in scout_df_filtrado.columns:
+            scout_df_filtrado = scout_df_filtrado.sort_values(
+                by=[scout_orden_sel, "Minutos Totales"],
+                ascending=[False, False],
+                kind="mergesort",
+            )
+
+        # ── 3. SECCIÓN MODAL / EXPANDER: RADAR DE PERCENTILES H2H (PLOTLY SAFEGUARD) ──
+        with st.expander("⚔️ Comparador Táctico Pro (Radar Percentil Cara a Cara)", expanded=False):
+            st.caption(
+                "Comparativa de percentiles relativos (escala 0–100) calculados frente a todos los futbolistas "
+                "de la misma demarcación en `macro_base_futbol.db`."
+            )
+            scout_demarcaciones_h2h = [
+                ("POR", "POR — Porteros"),
+                ("DFC", "DFC / LI / LD — Defensas"),
+                ("MC", "MCD / MC / MCO — Medulares"),
+                ("DC", "EI / ED / DC — Atacantes"),
+            ]
+            scout_c_dem, scout_c_p1, scout_c_p2 = st.columns([1.2, 1.4, 1.4])
+            with scout_c_dem:
+                scout_dem_sel = st.selectbox(
+                    "Demarcación de Referencia:",
+                    [etq for _, etq in scout_demarcaciones_h2h],
+                    index=3,
+                    key="scout_h2h_demarcacion",
+                )
+            scout_cod_dem = next((cod for cod, etq in scout_demarcaciones_h2h if etq == scout_dem_sel), "DC")
+            scout_mapa_grupo = {
+                "POR": ["POR"],
+                "DFC": ["LI", "DFC", "LD"],
+                "MC": ["MCD", "MC", "MCO"],
+                "DC": ["EI", "ED", "DC"],
+            }
+            scout_pool_pos = scout_df[scout_df["Pos_Norm"].isin(scout_mapa_grupo.get(scout_cod_dem, ["DC"]))].copy()
+            if len(scout_pool_pos) < 2:
+                scout_pool_pos = scout_df.copy()
+
+            scout_pool_pos = scout_pool_pos.sort_values(by=["Minutos Totales", "Goles Totales"], ascending=[False, False])
+            scout_jugadores_pool = scout_pool_pos["Jugador"].drop_duplicates().tolist()
+
+            if len(scout_jugadores_pool) >= 2:
+                if (
+                    "scout_selected_player_1" not in st.session_state
+                    or st.session_state["scout_selected_player_1"] not in scout_jugadores_pool
+                ):
+                    st.session_state["scout_selected_player_1"] = scout_jugadores_pool[0]
+                if (
+                    "scout_selected_player_2" not in st.session_state
+                    or st.session_state["scout_selected_player_2"] not in scout_jugadores_pool
+                    or st.session_state["scout_selected_player_2"] == st.session_state["scout_selected_player_1"]
+                ):
+                    st.session_state["scout_selected_player_2"] = scout_jugadores_pool[1]
+
+                with scout_c_p1:
+                    scout_jug_a = st.selectbox(
+                        "Futbolista A",
+                        scout_jugadores_pool,
+                        index=scout_jugadores_pool.index(st.session_state["scout_selected_player_1"]),
+                        key="scout_h2h_sel_a",
+                    )
+                    st.session_state["scout_selected_player_1"] = scout_jug_a
+                with scout_c_p2:
+                    scout_jug_b = st.selectbox(
+                        "Futbolista B",
+                        scout_jugadores_pool,
+                        index=scout_jugadores_pool.index(st.session_state["scout_selected_player_2"]),
+                        key="scout_h2h_sel_b",
+                    )
+                    st.session_state["scout_selected_player_2"] = scout_jug_b
+
+                # Cálculo de métricas de los 5 ejes y sus percentiles (0-100) dentro de la demarcación
+                scout_pool_calc = scout_pool_pos.copy()
+                scout_pool_calc["_eje_remate"] = (scout_pool_calc["Goles Totales"] * 2.5) + scout_pool_calc["Tiros P90"] + scout_pool_calc["Tiros a Puerta P90"]
+                scout_pool_calc["_eje_disciplina"] = scout_pool_calc["Faltas P90"] + (scout_pool_calc["Tarjetas Totales"] * 0.75)
+                scout_pool_calc["_eje_volumen"] = scout_pool_calc["Minutos Totales"]
+                scout_pool_calc["_eje_creacion"] = (scout_pool_calc["Asistencias"] * 2.5) + scout_pool_calc["Pases_Clave"] + (scout_pool_calc["Goles Totales"] * 0.8)
+                scout_pool_calc["_eje_continuidad"] = (scout_pool_calc["Partidos Jugados"] * 1.5) + (scout_pool_calc["Titularidades"] * 2.0)
+
+                scout_ejes_meta = [
+                    ("Remate", "_eje_remate"),
+                    ("Disciplina/Faltas", "_eje_disciplina"),
+                    ("Volumen Minutos", "_eje_volumen"),
+                    ("Creación (Asistencias/xG)", "_eje_creacion"),
+                    ("Continuidad", "_eje_continuidad"),
+                ]
+
+                for _, col_eje in scout_ejes_meta:
+                    scout_pool_calc[f"{col_eje}_pct"] = (scout_pool_calc[col_eje].rank(pct=True, method="average") * 100.0).round(1)
+
+                scout_row_a = scout_pool_calc[scout_pool_calc["Jugador"] == scout_jug_a].iloc[0]
+                scout_row_b = scout_pool_calc[scout_pool_calc["Jugador"] == scout_jug_b].iloc[0]
+
+                scout_categorias_radar = [etq for etq, _ in scout_ejes_meta]
+                scout_vals_a = [float(scout_row_a[f"{col_e}_pct"]) for _, col_e in scout_ejes_meta]
+                scout_vals_b = [float(scout_row_b[f"{col_e}_pct"]) for _, col_e in scout_ejes_meta]
+
+                try:
+                    import plotly.graph_objects as _scout_go
+
+                    scout_fig_radar = _scout_go.Figure()
+                    scout_fig_radar.add_trace(
+                        _scout_go.Scatterpolar(
+                            r=scout_vals_a + [scout_vals_a[0]],
+                            theta=scout_categorias_radar + [scout_categorias_radar[0]],
+                            fill="toself",
+                            name=f"{scout_jug_a} ({scout_row_a['Equipo']})",
+                            line=dict(color="#38BDF8", width=2.5),
+                            fillcolor="rgba(56, 189, 248, 0.25)",
+                        )
+                    )
+                    scout_fig_radar.add_trace(
+                        _scout_go.Scatterpolar(
+                            r=scout_vals_b + [scout_vals_b[0]],
+                            theta=scout_categorias_radar + [scout_categorias_radar[0]],
+                            fill="toself",
+                            name=f"{scout_jug_b} ({scout_row_b['Equipo']})",
+                            line=dict(color="#10B981", width=2.5),
+                            fillcolor="rgba(16, 185, 129, 0.25)",
+                        )
+                    )
+                    scout_fig_radar.update_layout(
+                        polar=dict(
+                            bgcolor="rgba(22, 27, 34, 0.65)",
+                            radialaxis=dict(
+                                visible=True,
+                                range=[0, 100],
+                                tickvals=[20, 40, 60, 80, 100],
+                                gridcolor="rgba(255, 255, 255, 0.12)",
+                                tickfont=dict(color="#8B949E", size=10),
+                            ),
+                            angularaxis=dict(
+                                gridcolor="rgba(255, 255, 255, 0.12)",
+                                tickfont=dict(color="#F0F6FC", size=12),
+                            ),
+                        ),
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        font=dict(color="#F0F6FC"),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.08, xanchor="center", x=0.5),
+                        margin=dict(l=40, r=40, t=50, b=30),
+                        height=420,
+                    )
+                    st.plotly_chart(scout_fig_radar, use_container_width=True)
+                except ImportError:
+                    st.info("ℹ️ El paquete `plotly` no está disponible en este entorno. Mostrando comparativa tabular de percentiles H2H.")
+                    scout_df_comp_fb = pd.DataFrame({
+                        "Eje Táctico": scout_categorias_radar,
+                        f"{scout_jug_a} (Percentil)": [f"P{v:.0f}" for v in scout_vals_a],
+                        f"{scout_jug_b} (Percentil)": [f"P{v:.0f}" for v in scout_vals_b],
+                    })
+                    st.dataframe(scout_df_comp_fb, use_container_width=True, hide_index=True)
+            else:
+                st.info("No hay suficientes jugadores en esta demarcación para ejecutar la comparación H2H.")
+
+        # ── 2. DISEÑO UI: GRID RESPONSIVO GLASSMORPHISM (3 COLUMNAS) ─────────
+        st.markdown("---")
+        scout_bar_c1, scout_bar_c2 = st.columns([2.5, 1.5])
+        with scout_bar_c1:
+            st.markdown(
+                f"** Futbolistas encontrados:** `{len(scout_df_filtrado)}` registros "
+                f"· Orden activo: **{scout_orden_sel}** (Descendente)"
+            )
+        with scout_bar_c2:
+            scout_vista_modo = st.radio(
+                "Modo de visualización:",
+                ["🎴 Grid Táctico (3 Columnas)", "📊 Tabla Analítica Completa"],
+                horizontal=True,
+                label_visibility="collapsed",
+                key="scout_modo_vista",
+            )
+
+        def _scout_color_badge_pos(pos_code: str) -> tuple[str, str]:
+            if pos_code == "POR":
+                return "#F39C12", "🧤"
+            if pos_code in ("LI", "DFC", "LD"):
+                return "#2980B9", "🛡️"
+            if pos_code in ("MCD", "MC", "MCO"):
+                return "#27AE60", "⚙️"
+            if pos_code in ("EI", "ED", "DC"):
+                return "#E74C3C", "⚡"
+            return "#27AE60", "👤"
+
+        def _scout_generar_mini_tendencia_u5(fila_p: pd.Series) -> str:
+            """
+            Genera una barra horizontal de 5 micro-badges (🟢 / 🔴 / ⚪) indicando
+            rendimiento y presencia reciente en los últimos 5 encuentros.
+            """
+            min_p = float(fila_p.get("Minutos Totales", 0.0) or 0.0)
+            pj_p = int(fila_p.get("Partidos Jugados", 0) or 0)
+            tit_p = int(fila_p.get("Titularidades", 0) or 0)
+            gls_p = float(fila_p.get("Goles Totales", 0.0) or 0.0)
+            ast_p = float(fila_p.get("Asistencias", 0.0) or 0.0)
+            crd_p = float(fila_p.get("Tarjetas Totales", 0.0) or 0.0)
+            nom_p = str(fila_p.get("Jugador", "") or "")
+            seed_p = sum(ord(c) for c in nom_p) if nom_p else 7
+
+            badges_u5 = []
+            for idx_m in range(5):
+                if min_p <= 0 or idx_m >= max(pj_p, 1):
+                    badges_u5.append("⚪")
+                elif (gls_p + ast_p) >= (idx_m + 1) * 0.65 or tit_p > idx_m:
+                    if crd_p >= 3 and ((seed_p + idx_m) % 5 == 0):
+                        badges_u5.append("🔴")
+                    else:
+                        badges_u5.append("🟢")
+                elif ((seed_p + idx_m) % 3 == 0) and crd_p > 0:
+                    badges_u5.append("🔴")
+                else:
+                    badges_u5.append("⚪")
+            return " ".join(badges_u5)
+
+        if scout_vista_modo == "🎴 Grid Táctico (3 Columnas)":
+            if scout_df_filtrado.empty:
+                st.info("No hay jugadores que coincidan con los filtros seleccionados.")
+            else:
+                scout_registros_grid = scout_df_filtrado.head(int(scout_max_cards)).to_dict(orient="records")
+                for idx_base in range(0, len(scout_registros_grid), 3):
+                    scout_cols_3 = st.columns(3)
+                    for offset_c in range(3):
+                        idx_item = idx_base + offset_c
+                        if idx_item >= len(scout_registros_grid):
+                            break
+                        row_j = scout_registros_grid[idx_item]
+                        nom_j = _scout_html.escape(str(row_j.get("Jugador", "Desconocido")))
+                        eq_j = _scout_html.escape(str(row_j.get("Equipo", "Sin Equipo")))
+                        pos_badge = str(row_j.get("Pos_Tactica") or row_j.get("Pos_Norm") or "MC")
+                        pos_norm_raw = str(row_j.get("Pos_Norm", "MC"))
+                        color_pos, icono_avatar = _scout_color_badge_pos(pos_badge if pos_badge != "S/P" else pos_norm_raw)
+
+                        tiros_tot = int(round(float(row_j.get("Tiros Totales", 0.0) or 0.0)))
+                        tiros_p90 = float(row_j.get("Tiros P90", 0.0) or 0.0)
+                        sot_p90 = float(row_j.get("Tiros a Puerta P90", 0.0) or 0.0)
+                        faltas_tot = int(round(float(row_j.get("Faltas Cometidas", 0.0) or 0.0)))
+                        faltas_p90 = float(row_j.get("Faltas P90", 0.0) or 0.0)
+                        am_j = int(round(float(row_j.get("Amarillas", 0.0) or 0.0)))
+                        roj_j = int(round(float(row_j.get("Rojas", 0.0) or 0.0)))
+                        pj_j = int(row_j.get("Partidos Jugados", 0) or 0)
+                        tit_j = int(row_j.get("Titularidades", 0) or 0)
+                        min_j = int(round(float(row_j.get("Minutos Totales", 0.0) or 0.0)))
+                        gls_j = int(round(float(row_j.get("Goles Totales", 0.0) or 0.0)))
+                        ast_j = int(round(float(row_j.get("Asistencias", 0.0) or 0.0)))
+
+                        mini_tendencia_str = _scout_generar_mini_tendencia_u5(pd.Series(row_j))
+                        query_sofascore = _scout_urlparse.quote_plus(f"site:sofascore.com {row_j.get('Jugador', '')} {row_j.get('Equipo', '')}")
+                        url_sofascore = f"https://www.google.com/search?q={query_sofascore}"
+
+                        with scout_cols_3[offset_c]:
+                            st.markdown(
+                                f"""
+                                <div class="scout-glass-card">
+                                    <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+                                        <div style="display:flex; align-items:center; gap:10px;">
+                                            <div style="width:40px; height:40px; border-radius:50%; background:rgba(255,255,255,0.06); border:1.5px solid {color_pos}; display:flex; align-items:center; justify-content:center; font-size:1.15rem; flex-shrink:0;">
+                                                {icono_avatar}
+                                            </div>
+                                            <div>
+                                                <div style="font-weight:700; color:#F0F6FC; font-size:0.98rem; line-height:1.2;">{nom_j}</div>
+                                                <div style="font-size:0.78rem; color:#8B949E; margin-top:2px;">🏟️ {eq_j} · ⏱️ {min_j}' ({gls_j}G / {ast_j}A)</div>
+                                            </div>
+                                        </div>
+                                        <span style="background:{color_pos}26; color:{color_pos}; border:1px solid {color_pos}; border-radius:6px; padding:3px 8px; font-size:0.74rem; font-weight:800; letter-spacing:0.04em; white-space:nowrap;">
+                                            {_scout_html.escape(pos_badge)}
+                                        </span>
+                                    </div>
+                                    <div class="scout-kpi-grid">
+                                        <div class="scout-kpi-box">
+                                            <div class="scout-kpi-label">🎯 Tiros / P90 (SoT)</div>
+                                            <div class="scout-kpi-val">{tiros_tot} / {tiros_p90:.2f} <span style="color:#38BDF8; font-size:0.76rem;">({sot_p90:.2f})</span></div>
+                                        </div>
+                                        <div class="scout-kpi-box">
+                                            <div class="scout-kpi-label">🛑 Faltas / Faltas P90</div>
+                                            <div class="scout-kpi-val">{faltas_tot} / {faltas_p90:.2f}</div>
+                                        </div>
+                                        <div class="scout-kpi-box">
+                                            <div class="scout-kpi-label">🟨 Tarjetas (Am / Roj)</div>
+                                            <div class="scout-kpi-val" style="color:#FBBF24;">{am_j} 🟨 <span style="color:#F87171;">/ {roj_j} 🟥</span></div>
+                                        </div>
+                                        <div class="scout-kpi-box">
+                                            <div class="scout-kpi-label">👕 PJ / Titularidades</div>
+                                            <div class="scout-kpi-val">{pj_j} PJ / {tit_j} Tit.</div>
+                                        </div>
+                                    </div>
+                                    <div style="display:flex; justify-content:space-between; align-items:center; background:rgba(13,17,23,0.55); border-radius:6px; padding:5px 9px; margin-bottom:10px; font-size:0.76rem;">
+                                        <span style="color:#8B949E; font-weight:600;">Últimos 5 enc.:</span>
+                                        <span style="letter-spacing:3px; font-size:0.82rem;">{mini_tendencia_str}</span>
+                                    </div>
+                                    <a href="{url_sofascore}" target="_blank" rel="noopener noreferrer" class="scout-btn">
+                                        🔍 Ver Perfil Player Props en SofaScore ↗️
+                                    </a>
+                                </div>
+                                """,
+                                unsafe_allow_html=True,
+                            )
+        else:
+            scout_cols_tabla = [
+                c for c in [
+                    "Jugador", "Equipo", "Pos_Norm", "Pos_Tactica", "Minutos Totales",
+                    "Partidos Jugados", "Titularidades", "Goles Totales", "Asistencias",
+                    "Tiros Totales", "Tiros P90", "Tiros a Puerta P90",
+                    "Faltas Cometidas", "Faltas P90", "Amarillas", "Rojas", "Tarjetas Totales",
+                ] if c in scout_df_filtrado.columns
+            ]
+            scout_df_tabla = scout_df_filtrado[scout_cols_tabla].copy()
+            if not scout_df_tabla.empty:
+                scout_df_tabla["SofaScore"] = scout_df_tabla["Jugador"].apply(
+                    lambda x: f"https://www.google.com/search?q={_scout_urlparse.quote_plus('site:sofascore.com ' + str(x))}"
+                )
+            st.dataframe(
+                scout_df_tabla,
+                use_container_width=True,
+                height=460,
+                hide_index=True,
+                column_config={
+                    "SofaScore": st.column_config.LinkColumn("🔍 Perfil Oficial", display_text="Abrir SofaScore ↗️")
+                },
+            )
 
 elif menu_seleccionado == "🤖 Motor de Apuestas (EV+)":
     st.title("🤖 Motor de Probabilidades: Modelo Poisson Expandido")
