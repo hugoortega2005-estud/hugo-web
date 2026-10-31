@@ -2672,6 +2672,7 @@ elif menu_seleccionado == "📡 Escáner Vivo EV+ (API)":
                     "Friccion_Badge": fric_info["badge_tactico"],
                     "Friccion_Alta": fric_info["es_alta"],
                     "Backtest_Badge": bt_info["badge"],
+                    "Backtest_ROI": round(float(bt_info.get("roi", 0.0) or 0.0), 2),
                 })
             except Exception:
                 continue
@@ -2937,53 +2938,202 @@ elif menu_seleccionado == "📡 Escáner Vivo EV+ (API)":
         k_c3.metric("Convicción Media (0-100)", f"{conv_media:.1f} pts")
         k_c4.metric("Eficiencia Kelly Media", f"{kelly_medio:.2f}%")
 
-        cols_vista = [
-            "Convicción",
-            "Fecha / Hora",
-            "Partido",
-            "Mercado",
-            "Casa",
-            "Cuota Mercado",
-            "Cuota Mínima Operable",
-            "Prob_Poisson",
-            "Prob_NoVig",
-            "Prob_Modelo",
+        # ── 1. HUMANIZACIÓN Y REFACTORIZACIÓN VISUAL DE LA TABLA PRINCIPAL EV+ ──
+        df_display = df_ops.copy()
+
+        def _formatear_ev_proyectado(fila):
+            try:
+                raw_st = fila.get("Stake_Num", None)
+                if raw_st is None or pd.isna(raw_st):
+                    st_str = str(fila.get("Stake_Recomendado", "0")).replace("€", "").strip()
+                    stake_val = float(st_str) if st_str else 0.0
+                else:
+                    stake_val = float(raw_st)
+            except (ValueError, TypeError, ZeroDivisionError, KeyError):
+                stake_val = 0.0
+
+            try:
+                raw_ev = fila.get("EV_Num", None)
+                if raw_ev is None or pd.isna(raw_ev):
+                    ev_str = str(fila.get("EV", "0")).replace("%", "").replace("⚠️", "").replace("+", "").strip()
+                    ev_val = float(ev_str) if ev_str else 0.0
+                else:
+                    ev_val = float(raw_ev)
+            except (ValueError, TypeError, ZeroDivisionError, KeyError):
+                ev_val = 0.0
+
+            try:
+                beneficio_proyectado = round(stake_val * (ev_val / 100.0), 2) if (stake_val and ev_val) else 0.0
+            except (ZeroDivisionError, TypeError, ValueError):
+                beneficio_proyectado = 0.0
+
+            sign_b = "+" if beneficio_proyectado >= 0 else ""
+            sign_e = "+" if ev_val >= 0 else ""
+            return f"{sign_b}{beneficio_proyectado:.2f} € ({sign_e}{ev_val:.1f}%)"
+
+        def _formatear_prob_real(fila):
+            try:
+                p_num = fila.get("P_Final_Num", None)
+                if p_num is not None and not pd.isna(p_num):
+                    return f"{float(p_num) * 100.0:.1f}%"
+                p_str = str(fila.get("Prob_Modelo", "0")).replace("%", "").strip()
+                return f"{float(p_str):.1f}%"
+            except (ValueError, TypeError, KeyError):
+                return str(fila.get("Prob_Modelo", "0.0%"))
+
+        try:
+            df_display["EV"] = df_display.apply(_formatear_ev_proyectado, axis=1)
+            df_display["Prob_Modelo"] = df_display.apply(_formatear_prob_real, axis=1)
+        except Exception:
+            pass
+
+        mapa_renombrado_ev = {
+            "Convicción": "Nivel Confianza",
+            "Fecha / Hora": "Horario",
+            "Partido": "Encuentro",
+            "Mercado": "Pronóstico / Selección",
+            "Casa": "Bookie",
+            "Cuota Mercado": "Cuota Actual",
+            "Cuota Mínima Operable": "Cuota Límite (No apostar por debajo)",
+            "Prob_Modelo": "Probabilidad Real (%)",
+            "Auditoría Sintética": "Recomendación Táctica",
+        }
+        df_display = df_display.rename(columns=mapa_renombrado_ev)
+
+        cols_vista_ejecutiva = [
+            "Nivel Confianza",
+            "Horario",
+            "Encuentro",
+            "Pronóstico / Selección",
+            "Bookie",
+            "Cuota Actual",
+            "Cuota Límite (No apostar por debajo)",
+            "Probabilidad Real (%)",
             "EV",
             "Stake_Recomendado",
-            "Auditoría Sintética",
+            "Recomendación Táctica",
         ]
-        cols_presentes = [c for c in cols_vista if c in df_ops.columns]
-        st.dataframe(df_ops[cols_presentes], use_container_width=True, hide_index=True)
+        cols_presentes = [
+            c for c in cols_vista_ejecutiva
+            if c in df_display.columns and c not in ("Prob_NoVig", "Prob_Poisson")
+        ]
+        df_vista_final = df_display[cols_presentes].copy()
+
+        def _estilo_ev_esmeralda(val):
+            try:
+                s_val = str(val)
+                if "€" in s_val and not s_val.strip().startswith("-"):
+                    if not s_val.strip().startswith("+0.00 €") and not s_val.strip().startswith("0.00 €"):
+                        return "color: #2ECC71; font-weight: 700;"
+            except Exception:
+                pass
+            return ""
+
+        try:
+            if "EV" in df_vista_final.columns:
+                try:
+                    styler_ev = df_vista_final.style.map(_estilo_ev_esmeralda, subset=["EV"])
+                except AttributeError:
+                    styler_ev = df_vista_final.style.applymap(_estilo_ev_esmeralda, subset=["EV"])
+                st.dataframe(styler_ev, use_container_width=True, hide_index=True)
+            else:
+                st.dataframe(df_vista_final, use_container_width=True, hide_index=True)
+        except Exception:
+            st.dataframe(df_vista_final, use_container_width=True, hide_index=True)
 
         # ── AUDITORÍA CRUZADA SQLITE, FRICCIÓN ARBITRAL, BACKTEST Y TELETRANSPORTE AL DOSSIER ──
         with st.expander("📋 Auditoría Cruzada SQLite, Fricción Táctica Arbitral, Backtest Empírico y Dossier", expanded=True):
+            mostrar_todo_backtest = st.checkbox(
+                "Mostrar escenarios con histórico negativo/neutro (Modo Auditoría Completa)",
+                value=False,
+                key="ev_pro_mostrar_todo_bt",
+            )
+
+            def _extraer_roi_numerico_bt(fila_op) -> float:
+                try:
+                    raw_roi = fila_op.get("Backtest_ROI", None)
+                    if raw_roi is not None and not pd.isna(raw_roi):
+                        val_r = float(raw_roi)
+                        if val_r != 0.0:
+                            return val_r
+                except (ValueError, TypeError, KeyError):
+                    pass
+                try:
+                    badge_txt = str(fila_op.get("Backtest_Badge", ""))
+                    m_roi = re.search(r"ROI:\s*([+-]?\d+(?:\.\d+)?)%", badge_txt)
+                    if m_roi:
+                        return float(m_roi.group(1))
+                except Exception:
+                    pass
+                return 0.0
+
+            tarjetas_renderizadas = 0
+            tarjetas_omitidas_bt = 0
+
             for idx_r, r_op in df_ops.iterrows():
+                roi_historico = _extraer_roi_numerico_bt(r_op)
+                if not mostrar_todo_backtest and roi_historico <= 0.0:
+                    tarjetas_omitidas_bt += 1
+                    continue
+
+                tarjetas_renderizadas += 1
                 loc_e = str(r_op.get("Equipo_Local", ""))
                 vis_e = str(r_op.get("Equipo_Visitante", ""))
                 fric_badge = str(r_op.get("Friccion_Badge", "🍃 Partido Fluido: Árbitro permisivo + baja tasa de faltas"))
                 fric_alta = bool(r_op.get("Friccion_Alta", False))
                 bt_badge = str(r_op.get("Backtest_Badge", "⚠️ Muestra histórica insuficiente en DB local"))
                 arb_nom = str(r_op.get("Arbitro_Asignado", "Colegiado Media Comité"))
-                arb_am = float(r_op.get("Arb_Amarillas", 4.05))
-                faltas_c = float(r_op.get("Faltas_Comb_6G", 23.0))
+                try:
+                    arb_am = float(r_op.get("Arb_Amarillas", 4.05) or 4.05)
+                except (ValueError, TypeError):
+                    arb_am = 4.05
+                try:
+                    faltas_c = float(r_op.get("Faltas_Comb_6G", 23.0) or 23.0)
+                except (ValueError, TypeError):
+                    faltas_c = 23.0
 
                 bg_fric = "rgba(239, 68, 68, 0.16)" if fric_alta else "rgba(16, 185, 129, 0.14)"
                 bd_fric = "#EF4444" if fric_alta else "#10B981"
                 tx_fric = "#FCA5A5" if fric_alta else "#6EE7B7"
 
-                es_bt_ok = bt_badge.startswith("📈")
-                bg_bt = "rgba(56, 189, 248, 0.14)" if es_bt_ok else "rgba(245, 158, 11, 0.14)"
-                bd_bt = "#38BDF8" if es_bt_ok else "#F59E0B"
-                tx_bt = "#7DD3FC" if es_bt_ok else "#FCD34D"
+                if roi_historico > 0.0:
+                    bg_bt = "rgba(46, 204, 113, 0.16)"
+                    bd_bt = "#2ECC71"
+                    tx_bt = "#6EE7B7"
+                elif bt_badge.startswith("📈"):
+                    bg_bt = "rgba(239, 68, 68, 0.14)"
+                    bd_bt = "#EF4444"
+                    tx_bt = "#FCA5A5"
+                else:
+                    bg_bt = "rgba(245, 158, 11, 0.14)"
+                    bd_bt = "#F59E0B"
+                    tx_bt = "#FCD34D"
+
+                try:
+                    c_merc_val = float(r_op.get("Cuota Mercado", 0.0) or 0.0)
+                except (ValueError, TypeError):
+                    c_merc_val = 0.0
+                try:
+                    c_lim_val = float(r_op.get("Cuota Mínima Operable", 0.0) or 0.0)
+                except (ValueError, TypeError):
+                    c_lim_val = 0.0
+                try:
+                    xg_loc_val = float(r_op.get("xG_6G_Local", 1.35) or 1.35)
+                except (ValueError, TypeError):
+                    xg_loc_val = 1.35
+                try:
+                    xg_vis_val = float(r_op.get("xG_6G_Vis", 1.25) or 1.25)
+                except (ValueError, TypeError):
+                    xg_vis_val = 1.25
 
                 with st.container(border=True):
                     c_aud1, c_aud2, c_aud3 = st.columns([3.4, 1.3, 1.3])
                     with c_aud1:
                         st.markdown(
-                            f"**{r_op['Partido']}** · `{r_op['Mercado']}` (@{r_op['Cuota Mercado']:.2f} vs Límite @{r_op['Cuota Mínima Operable']:.2f})  \n"
+                            f"**{r_op.get('Partido', '')}** · `{r_op.get('Mercado', '')}` (@{c_merc_val:.2f} vs Límite @{c_lim_val:.2f})  \n"
                             f"<span style='color:#94A3B8;font-size:12.5px;'>Rolling 6G xG SQLite: "
-                            f"<b>{loc_e}</b> {r_op.get('xG_6G_Local', 1.35):.2f} xG · "
-                            f"<b>{vis_e}</b> {r_op.get('xG_6G_Vis', 1.25):.2f} xG · "
+                            f"<b>{loc_e}</b> {xg_loc_val:.2f} xG · "
+                            f"<b>{vis_e}</b> {xg_vis_val:.2f} xG · "
                             f"Colegiado ref.: <b>{arb_nom}</b> ({arb_am:.2f} amarillas/p, {faltas_c:.1f} faltas comb.) · "
                             f"{r_op.get('Auditoría Sintética', '')}</span>",
                             unsafe_allow_html=True,
@@ -3050,6 +3200,12 @@ elif menu_seleccionado == "📡 Escáner Vivo EV+ (API)":
                                 on_click=_navegar_a_dossier_equipo,
                                 args=(eq_vis_canon,),
                             )
+
+            if tarjetas_renderizadas == 0 and not mostrar_todo_backtest and tarjetas_omitidas_bt > 0:
+                st.info(
+                    f"🛡️ Filtro de Auditoría Táctica activo: se han omitido {tarjetas_omitidas_bt} escenario(s) con ROI histórico negativo, neutro o sin muestra suficiente en SQLite. "
+                    "Activa la casilla superior si deseas auditar todos los registros."
+                )
 
         # ── PILAR 8: EXPORTACIÓN LIMPIA SÓLO EXCEL (.XLSX) ───────────────────
         st.markdown("#### 📥 Exportar Cartera Institucional")
