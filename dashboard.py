@@ -2372,6 +2372,443 @@ def ev_render_modulo():
 
 
 # ==============================================================================
+# HELPERS CUANTITATIVOS COMPARTIDOS (DOSSIER & COMPARADOR H2H PRO)
+# ==============================================================================
+def _col_disponible(df_in, candidatos):
+    for c in candidatos:
+        if c in df_in.columns:
+            return c
+    return None
+
+
+def _normalizar_partidos_equipo(df_raw, equipo):
+    """
+    Transforma los registros del equipo en un DataFrame estandarizado desde la perspectiva
+    del equipo analizado (propio vs rival), con soporte resiliente de columnas, córners,
+    métricas de fricción y xG estimado.
+    """
+    if df_raw is None or df_raw.empty:
+        return pd.DataFrame()
+
+    c_hg = _col_disponible(df_raw, ["FTHG", "HG", "goles_local"])
+    c_ag = _col_disponible(df_raw, ["FTAG", "AG", "goles_visitante"])
+    if not c_hg or not c_ag:
+        return pd.DataFrame()
+
+    c_hthg = _col_disponible(df_raw, ["HTHG"])
+    c_htag = _col_disponible(df_raw, ["HTAG"])
+    c_hxg = _col_disponible(df_raw, ["HxG", "xg_local"])
+    c_axg = _col_disponible(df_raw, ["AxG", "xg_visitante"])
+    c_hs = _col_disponible(df_raw, ["HS", "tiros_local"])
+    c_as = _col_disponible(df_raw, ["AS", "tiros_visitante"])
+    c_hst = _col_disponible(df_raw, ["HST", "sot_local"])
+    c_ast = _col_disponible(df_raw, ["AST", "sot_visitante"])
+    c_hc = _col_disponible(df_raw, ["HC", "corners_local", "corners_favor"])
+    c_ac = _col_disponible(df_raw, ["AC", "corners_visitante", "corners_contra"])
+    c_hthc = _col_disponible(df_raw, ["HTHC", "HC_1T", "corners_1t_local", "corners_1t"])
+    c_htac = _col_disponible(df_raw, ["HTAC", "AC_1T", "corners_1t_visitante", "corners_2t"])
+    c_hf = _col_disponible(df_raw, ["HF", "faltas_local"])
+    c_af = _col_disponible(df_raw, ["AF", "faltas_visitante"])
+    c_hy = _col_disponible(df_raw, ["HY", "amarillas_local"])
+    c_ay = _col_disponible(df_raw, ["AY", "amarillas_visitante"])
+    c_hr = _col_disponible(df_raw, ["HR", "rojas_local"])
+    c_ar = _col_disponible(df_raw, ["AR", "rojas_visitante"])
+
+    df_ord = _ordenar_por_fecha(df_raw)
+    registros = []
+    for _, row in df_ord.iterrows():
+        home_t = str(row.get("HomeTeam", row.get("equipo_local", "")))
+        es_local = home_t == str(equipo)
+        hg = pd.to_numeric(row.get(c_hg), errors="coerce")
+        ag = pd.to_numeric(row.get(c_ag), errors="coerce")
+        if pd.isna(hg) or pd.isna(ag):
+            continue
+        hg_f, ag_f = float(hg), float(ag)
+        gf = hg_f if es_local else ag_f
+        gc = ag_f if es_local else hg_f
+
+        ht_h = pd.to_numeric(row.get(c_hthg), errors="coerce") if c_hthg else np.nan
+        ht_a = pd.to_numeric(row.get(c_htag), errors="coerce") if c_htag else np.nan
+        if pd.notna(ht_h) and pd.notna(ht_a):
+            gf_1t = float(ht_h) if es_local else float(ht_a)
+            gc_1t = float(ht_a) if es_local else float(ht_h)
+            gf_2t = max(0.0, gf - gf_1t)
+            gc_2t = max(0.0, gc - gc_1t)
+            tiene_ht = 1
+        else:
+            gf_1t = gf * 0.44
+            gc_1t = gc * 0.44
+            gf_2t = gf * 0.56
+            gc_2t = gc * 0.56
+            tiene_ht = 0
+
+        hs_v = pd.to_numeric(row.get(c_hs), errors="coerce") if c_hs else np.nan
+        as_v = pd.to_numeric(row.get(c_as), errors="coerce") if c_as else np.nan
+        hst_v = pd.to_numeric(row.get(c_hst), errors="coerce") if c_hst else np.nan
+        ast_v = pd.to_numeric(row.get(c_ast), errors="coerce") if c_ast else np.nan
+
+        tiros_f = float(hs_v if es_local else as_v) if pd.notna(hs_v if es_local else as_v) else np.nan
+        tiros_c = float(as_v if es_local else hs_v) if pd.notna(as_v if es_local else hs_v) else np.nan
+        sot_f = float(hst_v if es_local else ast_v) if pd.notna(hst_v if es_local else ast_v) else np.nan
+        sot_c = float(ast_v if es_local else hst_v) if pd.notna(ast_v if es_local else hst_v) else np.nan
+
+        hc_v = pd.to_numeric(row.get(c_hc), errors="coerce") if c_hc else np.nan
+        ac_v = pd.to_numeric(row.get(c_ac), errors="coerce") if c_ac else np.nan
+        if c_hc == "corners_favor" and c_ac == "corners_contra":
+            corners_f = float(hc_v) if pd.notna(hc_v) else np.nan
+            corners_c = float(ac_v) if pd.notna(ac_v) else np.nan
+        else:
+            corners_f = float(hc_v if es_local else ac_v) if pd.notna(hc_v if es_local else ac_v) else np.nan
+            corners_c = float(ac_v if es_local else hc_v) if pd.notna(ac_v if es_local else hc_v) else np.nan
+
+        corners_tot = (corners_f + corners_c) if (pd.notna(corners_f) and pd.notna(corners_c)) else np.nan
+        over85_corners = (1.0 if corners_tot > 8.5 else 0.0) if pd.notna(corners_tot) else np.nan
+
+        hthc_v = pd.to_numeric(row.get(c_hthc), errors="coerce") if c_hthc else np.nan
+        htac_v = pd.to_numeric(row.get(c_htac), errors="coerce") if c_htac else np.nan
+        if pd.notna(hthc_v) and pd.notna(htac_v) and pd.notna(corners_f):
+            if c_hthc == "corners_1t" and c_htac == "corners_2t":
+                cor_f_1t = float(hthc_v)
+                cor_f_2t = float(htac_v)
+            else:
+                cor_f_1t = float(hthc_v if es_local else htac_v)
+                cor_f_2t = max(0.0, corners_f - cor_f_1t)
+            tiene_corners_ht = 1
+        elif pd.notna(corners_f):
+            if tiene_ht == 1 and (gf + gc) > 0:
+                peso_1t_partido = (gf_1t + gc_1t) / (gf + gc)
+                prop_1t = float(np.clip(0.70 * 0.45 + 0.30 * peso_1t_partido, 0.36, 0.58))
+            else:
+                prop_1t = 0.45
+            cor_f_1t = corners_f * prop_1t
+            cor_f_2t = corners_f * (1.0 - prop_1t)
+            tiene_corners_ht = 0
+        else:
+            cor_f_1t = np.nan
+            cor_f_2t = np.nan
+            tiene_corners_ht = 0
+
+        hxg_v = pd.to_numeric(row.get(c_hxg), errors="coerce") if c_hxg else np.nan
+        axg_v = pd.to_numeric(row.get(c_axg), errors="coerce") if c_axg else np.nan
+        xg_raw_f = hxg_v if es_local else axg_v
+        xg_raw_c = axg_v if es_local else hxg_v
+
+        if pd.notna(xg_raw_f):
+            xg_f = float(xg_raw_f)
+        elif pd.notna(sot_f) and pd.notna(tiros_f):
+            xg_f = max(0.10, 0.26 * sot_f + 0.04 * max(0.0, tiros_f - sot_f))
+        elif pd.notna(sot_f):
+            xg_f = max(0.10, 0.31 * sot_f)
+        else:
+            xg_f = gf
+
+        if pd.notna(xg_raw_c):
+            xg_c = float(xg_raw_c)
+        elif pd.notna(sot_c) and pd.notna(tiros_c):
+            xg_c = max(0.10, 0.26 * sot_c + 0.04 * max(0.0, tiros_c - sot_c))
+        elif pd.notna(sot_c):
+            xg_c = max(0.10, 0.31 * sot_c)
+        else:
+            xg_c = gc
+
+        hf_v = pd.to_numeric(row.get(c_hf), errors="coerce") if c_hf else np.nan
+        af_v = pd.to_numeric(row.get(c_af), errors="coerce") if c_af else np.nan
+        faltas_com = float(hf_v if es_local else af_v) if pd.notna(hf_v if es_local else af_v) else np.nan
+        faltas_rec = float(af_v if es_local else hf_v) if pd.notna(af_v if es_local else hf_v) else np.nan
+
+        hy_v = pd.to_numeric(row.get(c_hy), errors="coerce") if c_hy else np.nan
+        ay_v = pd.to_numeric(row.get(c_ay), errors="coerce") if c_ay else np.nan
+        hr_v = pd.to_numeric(row.get(c_hr), errors="coerce") if c_hr else np.nan
+        ar_v = pd.to_numeric(row.get(c_ar), errors="coerce") if c_ar else np.nan
+
+        amar_prop = float(hy_v if es_local else ay_v) if pd.notna(hy_v if es_local else ay_v) else np.nan
+        amar_riv = float(ay_v if es_local else hy_v) if pd.notna(ay_v if es_local else hy_v) else np.nan
+        rojas_prop = float(hr_v if es_local else ar_v) if pd.notna(hr_v if es_local else ar_v) else np.nan
+        rojas_riv = float(ar_v if es_local else hr_v) if pd.notna(ar_v if es_local else hr_v) else np.nan
+
+        registros.append({
+            "Date": row.get("Date", row.get("fecha", "N/A")),
+            "HomeTeam": home_t,
+            "AwayTeam": row.get("AwayTeam", row.get("equipo_visitante", "")),
+            "FTHG": int(hg_f),
+            "FTAG": int(ag_f),
+            "es_local": es_local,
+            "gf": gf,
+            "gc": gc,
+            "goles_tot": gf + gc,
+            "gf_1t": gf_1t,
+            "gc_1t": gc_1t,
+            "gf_2t": gf_2t,
+            "gc_2t": gc_2t,
+            "tiene_ht": tiene_ht,
+            "xg_f": xg_f,
+            "xg_c": xg_c,
+            "tiros_f": tiros_f,
+            "tiros_c": tiros_c,
+            "sot_f": sot_f,
+            "sot_c": sot_c,
+            "corners_f": corners_f,
+            "corners_c": corners_c,
+            "corners_tot": corners_tot,
+            "over85_corners": over85_corners,
+            "cor_f_1t": cor_f_1t,
+            "cor_f_2t": cor_f_2t,
+            "tiene_corners_ht": tiene_corners_ht,
+            "faltas_com": faltas_com,
+            "faltas_rec": faltas_rec,
+            "amar_prop": amar_prop,
+            "amar_riv": amar_riv,
+            "rojas_prop": rojas_prop,
+            "rojas_riv": rojas_riv,
+            "win": 1.0 if gf > gc else 0.0,
+            "draw": 1.0 if gf == gc else 0.0,
+            "loss": 1.0 if gf < gc else 0.0,
+            "over15": 1.0 if (gf + gc) > 1.5 else 0.0,
+            "over25": 1.0 if (gf + gc) > 2.5 else 0.0,
+            "over35": 1.0 if (gf + gc) > 3.5 else 0.0,
+            "under25": 1.0 if (gf + gc) < 2.5 else 0.0,
+            "btts_si": 1.0 if (gf > 0 and gc > 0) else 0.0,
+            "btts_no": 1.0 if not (gf > 0 and gc > 0) else 0.0,
+            "clean_sheet": 1.0 if gc == 0 else 0.0,
+            "failed_to_score": 1.0 if gf == 0 else 0.0,
+        })
+    return pd.DataFrame(registros)
+
+
+def _media_ponderada_segura(df_norm, col, usar_decay=False, xi=0.008, default=0.0):
+    if df_norm is None or df_norm.empty or col not in df_norm.columns:
+        return float(default)
+    s = pd.to_numeric(df_norm[col], errors="coerce").dropna()
+    if s.empty:
+        return float(default)
+    if not usar_decay:
+        return float(s.mean())
+    sub = df_norm.loc[s.index]
+    w = calcular_pesos_time_decay(sub, xi=xi)
+    if len(w) != len(s) or float(np.sum(w)) <= 0.0:
+        return float(s.mean())
+    return float(np.average(s.to_numpy(dtype=float), weights=w))
+
+
+def _calcular_resumen_bloque(df_norm, usar_decay=False, media_liga_gf=1.35, media_liga_gc=1.35, df_fallback=None):
+    n = len(df_norm) if df_norm is not None else 0
+    if n == 0:
+        return {
+            "n": 0, "v": 0, "e": 0, "d": 0,
+            "win_rate": 0.0, "draw_rate": 0.0, "loss_rate": 0.0,
+            "gf_tot": 0, "gc_tot": 0,
+            "gf_med": 0.0, "gc_med": 0.0,
+            "xg_f": 0.0, "xg_c": 0.0, "xg_neto": 0.0, "diff_g_xg": 0.0,
+            "tiros_f": 0.0, "tiros_c": 0.0, "sot_f": 0.0, "sot_c": 0.0,
+            "sot_ratio": 0.0, "sot_ratio_c": 0.0,
+            "conv_sot": 0.0, "conv_tiros": 0.0,
+            "corners_f": 0.0, "corners_c": 0.0, "corners_tot": 0.0,
+            "over85_corners": 0.0, "cor_1t_pct": 45.0, "cor_2t_pct": 55.0,
+            "tiene_corners_ht": 0, "n_corners": 0,
+            "atk_rating": 1.0, "def_rating": 1.0,
+            "over15": 0.0, "over25": 0.0, "over35": 0.0, "under25": 0.0,
+            "btts_si": 0.0, "btts_no": 0.0, "clean_sheet": 0.0, "failed_to_score": 0.0,
+            "over25_cnt": 0, "btts_cnt": 0, "cs_cnt": 0,
+            "gf_1t_pct": 45.0, "gf_2t_pct": 55.0, "gc_1t_pct": 45.0, "gc_2t_pct": 55.0,
+            "amar_prop": 0.0, "rojas_prop": 0.0, "amar_riv": 0.0, "rojas_riv": 0.0,
+            "faltas_com": 0.0, "faltas_rec": 0.0, "faltas_por_amarilla": 0.0, "friccion_idx": 0.0,
+        }
+
+    def _media_con_fb(col_name, default_val):
+        if col_name in df_norm.columns and pd.to_numeric(df_norm[col_name], errors="coerce").dropna().any():
+            return _media_ponderada_segura(df_norm, col_name, usar_decay=usar_decay, default=default_val)
+        if df_fallback is not None and not df_fallback.empty and col_name in df_fallback.columns:
+            s_fb = pd.to_numeric(df_fallback[col_name], errors="coerce").dropna()
+            if not s_fb.empty:
+                return _media_ponderada_segura(df_fallback, col_name, usar_decay=usar_decay, default=default_val)
+        return float(default_val)
+
+    v_cnt = int(df_norm["win"].sum())
+    e_cnt = int(df_norm["draw"].sum())
+    d_cnt = int(df_norm["loss"].sum())
+    gf_tot = int(df_norm["gf"].sum())
+    gc_tot = int(df_norm["gc"].sum())
+
+    gf_med = _media_ponderada_segura(df_norm, "gf", usar_decay=usar_decay)
+    gc_med = _media_ponderada_segura(df_norm, "gc", usar_decay=usar_decay)
+    xg_f = _media_ponderada_segura(df_norm, "xg_f", usar_decay=usar_decay, default=gf_med)
+    xg_c = _media_ponderada_segura(df_norm, "xg_c", usar_decay=usar_decay, default=gc_med)
+    tiros_f = _media_con_fb("tiros_f", 11.5)
+    tiros_c = _media_con_fb("tiros_c", 11.5)
+    sot_f = _media_con_fb("sot_f", 4.0)
+    sot_c = _media_con_fb("sot_c", 4.0)
+
+    sot_ratio = (sot_f / tiros_f * 100.0) if tiros_f > 0 else 0.0
+    sot_ratio_c = (sot_c / tiros_c * 100.0) if tiros_c > 0 else 0.0
+    conv_sot = (gf_med / sot_f * 100.0) if sot_f > 0 else 0.0
+    conv_tiros = (gf_med / tiros_f * 100.0) if tiros_f > 0 else 0.0
+
+    n_cor_direct = int(pd.to_numeric(df_norm["corners_f"], errors="coerce").notna().sum()) if "corners_f" in df_norm.columns else 0
+    if n_cor_direct > 0:
+        n_corners = n_cor_direct
+    elif df_fallback is not None and not df_fallback.empty and "corners_f" in df_fallback.columns:
+        n_corners = int(pd.to_numeric(df_fallback["corners_f"], errors="coerce").notna().sum())
+    else:
+        n_corners = 0
+
+    corners_f = _media_con_fb("corners_f", 5.2)
+    corners_c = _media_con_fb("corners_c", 4.4)
+    corners_tot = _media_con_fb("corners_tot", corners_f + corners_c)
+    over85_corners = _media_con_fb("over85_corners", 0.55) * 100.0
+
+    cor_f_1t_m = _media_con_fb("cor_f_1t", corners_f * 0.45)
+    cor_f_2t_m = _media_con_fb("cor_f_2t", corners_f * 0.55)
+    sum_cor_ht = cor_f_1t_m + cor_f_2t_m
+    cor_1t_pct = (cor_f_1t_m / sum_cor_ht * 100.0) if sum_cor_ht > 0 else 45.0
+    cor_2t_pct = 100.0 - cor_1t_pct
+    tiene_corners_ht = int(df_norm["tiene_corners_ht"].sum()) if "tiene_corners_ht" in df_norm.columns else 0
+
+    atk_rating = (gf_med / media_liga_gf) if media_liga_gf > 0 else 1.0
+    def_rating = (gc_med / media_liga_gc) if media_liga_gc > 0 else 1.0
+
+    gf_1t_m = _media_ponderada_segura(df_norm, "gf_1t", usar_decay=usar_decay)
+    gf_2t_m = _media_ponderada_segura(df_norm, "gf_2t", usar_decay=usar_decay)
+    gc_1t_m = _media_ponderada_segura(df_norm, "gc_1t", usar_decay=usar_decay)
+    gc_2t_m = _media_ponderada_segura(df_norm, "gc_2t", usar_decay=usar_decay)
+
+    sum_gf_ht = gf_1t_m + gf_2t_m
+    sum_gc_ht = gc_1t_m + gc_2t_m
+    gf_1t_pct = (gf_1t_m / sum_gf_ht * 100.0) if sum_gf_ht > 0 else 45.0
+    gf_2t_pct = 100.0 - gf_1t_pct
+    gc_1t_pct = (gc_1t_m / sum_gc_ht * 100.0) if sum_gc_ht > 0 else 45.0
+    gc_2t_pct = 100.0 - gc_1t_pct
+
+    amar_prop = _media_con_fb("amar_prop", 2.0)
+    rojas_prop = _media_con_fb("rojas_prop", 0.0)
+    amar_riv = _media_con_fb("amar_riv", 2.0)
+    rojas_riv = _media_con_fb("rojas_riv", 0.0)
+    faltas_com = _media_con_fb("faltas_com", 11.5)
+    faltas_rec = _media_con_fb("faltas_rec", 11.5)
+    faltas_por_amarilla = (faltas_com / amar_prop) if amar_prop > 0.05 else faltas_com
+    friccion_idx = faltas_com + faltas_rec + amar_prop + amar_riv + rojas_prop + rojas_riv
+
+    return {
+        "n": n,
+        "v": v_cnt,
+        "e": e_cnt,
+        "d": d_cnt,
+        "win_rate": _media_ponderada_segura(df_norm, "win", usar_decay=usar_decay) * 100.0,
+        "draw_rate": _media_ponderada_segura(df_norm, "draw", usar_decay=usar_decay) * 100.0,
+        "loss_rate": _media_ponderada_segura(df_norm, "loss", usar_decay=usar_decay) * 100.0,
+        "gf_tot": gf_tot,
+        "gc_tot": gc_tot,
+        "gf_med": gf_med,
+        "gc_med": gc_med,
+        "xg_f": xg_f,
+        "xg_c": xg_c,
+        "xg_neto": xg_f - xg_c,
+        "diff_g_xg": gf_med - xg_f,
+        "tiros_f": tiros_f,
+        "tiros_c": tiros_c,
+        "sot_f": sot_f,
+        "sot_c": sot_c,
+        "sot_ratio": sot_ratio,
+        "sot_ratio_c": sot_ratio_c,
+        "conv_sot": conv_sot,
+        "conv_tiros": conv_tiros,
+        "corners_f": corners_f,
+        "corners_c": corners_c,
+        "corners_tot": corners_tot,
+        "over85_corners": over85_corners,
+        "cor_1t_pct": cor_1t_pct,
+        "cor_2t_pct": cor_2t_pct,
+        "tiene_corners_ht": tiene_corners_ht,
+        "n_corners": n_corners,
+        "atk_rating": atk_rating,
+        "def_rating": def_rating,
+        "over15": _media_ponderada_segura(df_norm, "over15", usar_decay=usar_decay) * 100.0,
+        "over25": _media_ponderada_segura(df_norm, "over25", usar_decay=usar_decay) * 100.0,
+        "over35": _media_ponderada_segura(df_norm, "over35", usar_decay=usar_decay) * 100.0,
+        "under25": _media_ponderada_segura(df_norm, "under25", usar_decay=usar_decay) * 100.0,
+        "btts_si": _media_ponderada_segura(df_norm, "btts_si", usar_decay=usar_decay) * 100.0,
+        "btts_no": _media_ponderada_segura(df_norm, "btts_no", usar_decay=usar_decay) * 100.0,
+        "clean_sheet": _media_ponderada_segura(df_norm, "clean_sheet", usar_decay=usar_decay) * 100.0,
+        "failed_to_score": _media_ponderada_segura(df_norm, "failed_to_score", usar_decay=usar_decay) * 100.0,
+        "over25_cnt": int(df_norm["over25"].sum()),
+        "btts_cnt": int(df_norm["btts_si"].sum()),
+        "cs_cnt": int(df_norm["clean_sheet"].sum()),
+        "gf_1t_pct": gf_1t_pct,
+        "gf_2t_pct": gf_2t_pct,
+        "gc_1t_pct": gc_1t_pct,
+        "gc_2t_pct": gc_2t_pct,
+        "amar_prop": amar_prop,
+        "rojas_prop": rojas_prop,
+        "amar_riv": amar_riv,
+        "rojas_riv": rojas_riv,
+        "faltas_com": faltas_com,
+        "faltas_rec": faltas_rec,
+        "faltas_por_amarilla": faltas_por_amarilla,
+        "friccion_idx": friccion_idx,
+    }
+
+
+def _construir_tabla_rendimiento_condicion(stats_cond: dict, col_metrica: str) -> pd.DataFrame:
+    """
+    Construye el DataFrame de métricas comparativas por condición (Casa / Fuera)
+    incluyendo el desglose estadístico de Córners, Precisión SOT y Fricción Avanzada.
+    """
+    if stats_cond.get("tiene_corners_ht", 0) > 0:
+        dist_corners_str = (
+            f"{stats_cond['cor_1t_pct']:.0f}% (1T) / {stats_cond['cor_2t_pct']:.0f}% (2T) · "
+            f"Media 90m: {stats_cond['corners_f']:.1f} a favor vs {stats_cond['corners_c']:.1f} concedidos"
+        )
+    else:
+        dist_corners_str = (
+            f"{stats_cond['cor_1t_pct']:.0f}% (1T) / {stats_cond['cor_2t_pct']:.0f}% (2T) · "
+            f"Fallback Media 90m (partidos con datos): {stats_cond['corners_f']:.1f} a favor vs "
+            f"{stats_cond['corners_c']:.1f} concedidos ({stats_cond['corners_tot']:.1f} tot./90m)"
+        )
+
+    return pd.DataFrame([
+        {
+            col_metrica: "Volumen de Tiro (Totales F / C)",
+            "Valor": (
+                f"{stats_cond['tiros_f']:.1f} realizados vs {stats_cond['tiros_c']:.1f} concedidos "
+                f"({stats_cond['conv_tiros']:.1f}% conv. total)"
+            ),
+        },
+        {
+            col_metrica: "Precisión de Disparo (SOT Ratio)",
+            "Valor": (
+                f"{stats_cond['sot_ratio']:.1f}% ({stats_cond['sot_f']:.1f} Tiros a Puerta / "
+                f"{stats_cond['tiros_f']:.1f} Tiros Totales) · Rival: {stats_cond['sot_ratio_c']:.1f}%"
+            ),
+        },
+        {
+            col_metrica: "Córners (Favor / Contra por 90m)",
+            "Valor": (
+                f"{stats_cond['corners_f']:.1f} a favor vs {stats_cond['corners_c']:.1f} concedidos "
+                f"({stats_cond['over85_corners']:.1f}% partidos con +8.5 córners totales)"
+            ),
+        },
+        {
+            col_metrica: "Distribución Córners 1T / 2T",
+            "Valor": dist_corners_str,
+        },
+        {
+            col_metrica: "Distribución Goles 1T / 2T",
+            "Valor": (
+                f"Anotados: {stats_cond['gf_1t_pct']:.0f}% (1T) / {stats_cond['gf_2t_pct']:.0f}% (2T) · "
+                f"Encajados: {stats_cond['gc_1t_pct']:.0f}% (1T) / {stats_cond['gc_2t_pct']:.0f}% (2T)"
+            ),
+        },
+        {
+            col_metrica: "Tasa de Fricción & Ratio Tarjeta/Falta",
+            "Valor": (
+                f"Faltas: {stats_cond['faltas_com']:.1f} Com. / {stats_cond['faltas_rec']:.1f} Rec. · "
+                f"Amarillas: {stats_cond['amar_prop']:.2f} Prop. / {stats_cond['amar_riv']:.2f} Riv. · "
+                f"Faltas por Tarjeta recibida: {stats_cond['faltas_por_amarilla']:.1f} faltas/amarilla"
+            ),
+        },
+    ])
+
+
+# ==============================================================================
 # NAVEGACIÓN Y SECCIONES
 # ==============================================================================
 render_top_navigation_bar()
@@ -4008,279 +4445,6 @@ elif menu_seleccionado == "📊 Dossier de Equipo":
     if err_partidos or df_partidos_global.empty:
         st.warning("No hay datos de partidos disponibles en la base de datos.")
     else:
-        def _col_disponible(df_in, candidatos):
-            for c in candidatos:
-                if c in df_in.columns:
-                    return c
-            return None
-
-        def _normalizar_partidos_equipo(df_raw, equipo):
-            """
-            Transforma los registros del equipo en un DataFrame estandarizado desde la perspectiva
-            del equipo analizado (propio vs rival), con soporte resiliente de columnas y xG estimado.
-            """
-            if df_raw is None or df_raw.empty:
-                return pd.DataFrame()
-
-            c_hg = _col_disponible(df_raw, ["FTHG", "HG"])
-            c_ag = _col_disponible(df_raw, ["FTAG", "AG"])
-            if not c_hg or not c_ag:
-                return pd.DataFrame()
-
-            c_hthg = _col_disponible(df_raw, ["HTHG"])
-            c_htag = _col_disponible(df_raw, ["HTAG"])
-            c_hxg = _col_disponible(df_raw, ["HxG"])
-            c_axg = _col_disponible(df_raw, ["AxG"])
-            c_hs = _col_disponible(df_raw, ["HS"])
-            c_as = _col_disponible(df_raw, ["AS"])
-            c_hst = _col_disponible(df_raw, ["HST"])
-            c_ast = _col_disponible(df_raw, ["AST"])
-            c_hf = _col_disponible(df_raw, ["HF"])
-            c_af = _col_disponible(df_raw, ["AF"])
-            c_hy = _col_disponible(df_raw, ["HY"])
-            c_ay = _col_disponible(df_raw, ["AY"])
-            c_hr = _col_disponible(df_raw, ["HR"])
-            c_ar = _col_disponible(df_raw, ["AR"])
-
-            df_ord = _ordenar_por_fecha(df_raw)
-            registros = []
-            for _, row in df_ord.iterrows():
-                es_local = str(row.get("HomeTeam", "")) == str(equipo)
-                hg = pd.to_numeric(row.get(c_hg), errors="coerce")
-                ag = pd.to_numeric(row.get(c_ag), errors="coerce")
-                if pd.isna(hg) or pd.isna(ag):
-                    continue
-                hg_f, ag_f = float(hg), float(ag)
-                gf = hg_f if es_local else ag_f
-                gc = ag_f if es_local else hg_f
-
-                ht_h = pd.to_numeric(row.get(c_hthg), errors="coerce") if c_hthg else np.nan
-                ht_a = pd.to_numeric(row.get(c_htag), errors="coerce") if c_htag else np.nan
-                if pd.notna(ht_h) and pd.notna(ht_a):
-                    gf_1t = float(ht_h) if es_local else float(ht_a)
-                    gc_1t = float(ht_a) if es_local else float(ht_h)
-                    gf_2t = max(0.0, gf - gf_1t)
-                    gc_2t = max(0.0, gc - gc_1t)
-                    tiene_ht = 1
-                else:
-                    gf_1t = gf * 0.44
-                    gc_1t = gc * 0.44
-                    gf_2t = gf * 0.56
-                    gc_2t = gc * 0.56
-                    tiene_ht = 0
-
-                hs_v = pd.to_numeric(row.get(c_hs), errors="coerce") if c_hs else np.nan
-                as_v = pd.to_numeric(row.get(c_as), errors="coerce") if c_as else np.nan
-                hst_v = pd.to_numeric(row.get(c_hst), errors="coerce") if c_hst else np.nan
-                ast_v = pd.to_numeric(row.get(c_ast), errors="coerce") if c_ast else np.nan
-
-                tiros_f = float(hs_v if es_local else as_v) if pd.notna(hs_v if es_local else as_v) else np.nan
-                tiros_c = float(as_v if es_local else hs_v) if pd.notna(as_v if es_local else hs_v) else np.nan
-                sot_f = float(hst_v if es_local else ast_v) if pd.notna(hst_v if es_local else ast_v) else np.nan
-                sot_c = float(ast_v if es_local else hst_v) if pd.notna(ast_v if es_local else hst_v) else np.nan
-
-                hxg_v = pd.to_numeric(row.get(c_hxg), errors="coerce") if c_hxg else np.nan
-                axg_v = pd.to_numeric(row.get(c_axg), errors="coerce") if c_axg else np.nan
-                xg_raw_f = hxg_v if es_local else axg_v
-                xg_raw_c = axg_v if es_local else hxg_v
-
-                if pd.notna(xg_raw_f):
-                    xg_f = float(xg_raw_f)
-                elif pd.notna(sot_f) and pd.notna(tiros_f):
-                    xg_f = max(0.10, 0.26 * sot_f + 0.04 * max(0.0, tiros_f - sot_f))
-                elif pd.notna(sot_f):
-                    xg_f = max(0.10, 0.31 * sot_f)
-                else:
-                    xg_f = gf
-
-                if pd.notna(xg_raw_c):
-                    xg_c = float(xg_raw_c)
-                elif pd.notna(sot_c) and pd.notna(tiros_c):
-                    xg_c = max(0.10, 0.26 * sot_c + 0.04 * max(0.0, tiros_c - sot_c))
-                elif pd.notna(sot_c):
-                    xg_c = max(0.10, 0.31 * sot_c)
-                else:
-                    xg_c = gc
-
-                hf_v = pd.to_numeric(row.get(c_hf), errors="coerce") if c_hf else np.nan
-                af_v = pd.to_numeric(row.get(c_af), errors="coerce") if c_af else np.nan
-                faltas_com = float(hf_v if es_local else af_v) if pd.notna(hf_v if es_local else af_v) else np.nan
-                faltas_rec = float(af_v if es_local else hf_v) if pd.notna(af_v if es_local else hf_v) else np.nan
-
-                hy_v = pd.to_numeric(row.get(c_hy), errors="coerce") if c_hy else np.nan
-                ay_v = pd.to_numeric(row.get(c_ay), errors="coerce") if c_ay else np.nan
-                hr_v = pd.to_numeric(row.get(c_hr), errors="coerce") if c_hr else np.nan
-                ar_v = pd.to_numeric(row.get(c_ar), errors="coerce") if c_ar else np.nan
-
-                amar_prop = float(hy_v if es_local else ay_v) if pd.notna(hy_v if es_local else ay_v) else 0.0
-                amar_riv = float(ay_v if es_local else hy_v) if pd.notna(ay_v if es_local else hy_v) else 0.0
-                rojas_prop = float(hr_v if es_local else ar_v) if pd.notna(hr_v if es_local else ar_v) else 0.0
-                rojas_riv = float(ar_v if es_local else hr_v) if pd.notna(ar_v if es_local else hr_v) else 0.0
-
-                registros.append({
-                    "Date": row.get("Date", "N/A"),
-                    "HomeTeam": row.get("HomeTeam", ""),
-                    "AwayTeam": row.get("AwayTeam", ""),
-                    "FTHG": int(hg_f),
-                    "FTAG": int(ag_f),
-                    "es_local": es_local,
-                    "gf": gf,
-                    "gc": gc,
-                    "goles_tot": gf + gc,
-                    "gf_1t": gf_1t,
-                    "gc_1t": gc_1t,
-                    "gf_2t": gf_2t,
-                    "gc_2t": gc_2t,
-                    "tiene_ht": tiene_ht,
-                    "xg_f": xg_f,
-                    "xg_c": xg_c,
-                    "tiros_f": tiros_f,
-                    "tiros_c": tiros_c,
-                    "sot_f": sot_f,
-                    "sot_c": sot_c,
-                    "faltas_com": faltas_com,
-                    "faltas_rec": faltas_rec,
-                    "amar_prop": amar_prop,
-                    "amar_riv": amar_riv,
-                    "rojas_prop": rojas_prop,
-                    "rojas_riv": rojas_riv,
-                    "win": 1.0 if gf > gc else 0.0,
-                    "draw": 1.0 if gf == gc else 0.0,
-                    "loss": 1.0 if gf < gc else 0.0,
-                    "over15": 1.0 if (gf + gc) > 1.5 else 0.0,
-                    "over25": 1.0 if (gf + gc) > 2.5 else 0.0,
-                    "over35": 1.0 if (gf + gc) > 3.5 else 0.0,
-                    "under25": 1.0 if (gf + gc) < 2.5 else 0.0,
-                    "btts_si": 1.0 if (gf > 0 and gc > 0) else 0.0,
-                    "btts_no": 1.0 if not (gf > 0 and gc > 0) else 0.0,
-                    "clean_sheet": 1.0 if gc == 0 else 0.0,
-                    "failed_to_score": 1.0 if gf == 0 else 0.0,
-                })
-            return pd.DataFrame(registros)
-
-        def _media_ponderada_segura(df_norm, col, usar_decay=False, xi=0.008, default=0.0):
-            if df_norm is None or df_norm.empty or col not in df_norm.columns:
-                return float(default)
-            s = pd.to_numeric(df_norm[col], errors="coerce").dropna()
-            if s.empty:
-                return float(default)
-            if not usar_decay:
-                return float(s.mean())
-            sub = df_norm.loc[s.index]
-            w = calcular_pesos_time_decay(sub, xi=xi)
-            if len(w) != len(s) or float(np.sum(w)) <= 0.0:
-                return float(s.mean())
-            return float(np.average(s.to_numpy(dtype=float), weights=w))
-
-        def _calcular_resumen_bloque(df_norm, usar_decay=False, media_liga_gf=1.35, media_liga_gc=1.35):
-            n = len(df_norm) if df_norm is not None else 0
-            if n == 0:
-                return {
-                    "n": 0, "v": 0, "e": 0, "d": 0,
-                    "win_rate": 0.0, "draw_rate": 0.0, "loss_rate": 0.0,
-                    "gf_tot": 0, "gc_tot": 0,
-                    "gf_med": 0.0, "gc_med": 0.0,
-                    "xg_f": 0.0, "xg_c": 0.0, "xg_neto": 0.0, "diff_g_xg": 0.0,
-                    "tiros_f": 0.0, "tiros_c": 0.0, "sot_f": 0.0, "sot_c": 0.0,
-                    "conv_sot": 0.0, "conv_tiros": 0.0,
-                    "atk_rating": 1.0, "def_rating": 1.0,
-                    "over15": 0.0, "over25": 0.0, "over35": 0.0, "under25": 0.0,
-                    "btts_si": 0.0, "btts_no": 0.0, "clean_sheet": 0.0, "failed_to_score": 0.0,
-                    "over25_cnt": 0, "btts_cnt": 0, "cs_cnt": 0,
-                    "gf_1t_pct": 45.0, "gf_2t_pct": 55.0, "gc_1t_pct": 45.0, "gc_2t_pct": 55.0,
-                    "amar_prop": 0.0, "rojas_prop": 0.0, "amar_riv": 0.0, "rojas_riv": 0.0,
-                    "faltas_com": 0.0, "faltas_rec": 0.0, "friccion_idx": 0.0,
-                }
-
-            v_cnt = int(df_norm["win"].sum())
-            e_cnt = int(df_norm["draw"].sum())
-            d_cnt = int(df_norm["loss"].sum())
-            gf_tot = int(df_norm["gf"].sum())
-            gc_tot = int(df_norm["gc"].sum())
-
-            gf_med = _media_ponderada_segura(df_norm, "gf", usar_decay=usar_decay)
-            gc_med = _media_ponderada_segura(df_norm, "gc", usar_decay=usar_decay)
-            xg_f = _media_ponderada_segura(df_norm, "xg_f", usar_decay=usar_decay, default=gf_med)
-            xg_c = _media_ponderada_segura(df_norm, "xg_c", usar_decay=usar_decay, default=gc_med)
-            tiros_f = _media_ponderada_segura(df_norm, "tiros_f", usar_decay=usar_decay, default=11.5)
-            tiros_c = _media_ponderada_segura(df_norm, "tiros_c", usar_decay=usar_decay, default=11.5)
-            sot_f = _media_ponderada_segura(df_norm, "sot_f", usar_decay=usar_decay, default=4.0)
-            sot_c = _media_ponderada_segura(df_norm, "sot_c", usar_decay=usar_decay, default=4.0)
-
-            conv_sot = (gf_med / sot_f * 100.0) if sot_f > 0 else 0.0
-            conv_tiros = (gf_med / tiros_f * 100.0) if tiros_f > 0 else 0.0
-
-            atk_rating = (gf_med / media_liga_gf) if media_liga_gf > 0 else 1.0
-            def_rating = (gc_med / media_liga_gc) if media_liga_gc > 0 else 1.0
-
-            gf_1t_m = _media_ponderada_segura(df_norm, "gf_1t", usar_decay=usar_decay)
-            gf_2t_m = _media_ponderada_segura(df_norm, "gf_2t", usar_decay=usar_decay)
-            gc_1t_m = _media_ponderada_segura(df_norm, "gc_1t", usar_decay=usar_decay)
-            gc_2t_m = _media_ponderada_segura(df_norm, "gc_2t", usar_decay=usar_decay)
-
-            sum_gf_ht = gf_1t_m + gf_2t_m
-            sum_gc_ht = gc_1t_m + gc_2t_m
-            gf_1t_pct = (gf_1t_m / sum_gf_ht * 100.0) if sum_gf_ht > 0 else 45.0
-            gf_2t_pct = 100.0 - gf_1t_pct
-            gc_1t_pct = (gc_1t_m / sum_gc_ht * 100.0) if sum_gc_ht > 0 else 45.0
-            gc_2t_pct = 100.0 - gc_1t_pct
-
-            amar_prop = _media_ponderada_segura(df_norm, "amar_prop", usar_decay=usar_decay)
-            rojas_prop = _media_ponderada_segura(df_norm, "rojas_prop", usar_decay=usar_decay)
-            amar_riv = _media_ponderada_segura(df_norm, "amar_riv", usar_decay=usar_decay)
-            rojas_riv = _media_ponderada_segura(df_norm, "rojas_riv", usar_decay=usar_decay)
-            faltas_com = _media_ponderada_segura(df_norm, "faltas_com", usar_decay=usar_decay, default=11.5)
-            faltas_rec = _media_ponderada_segura(df_norm, "faltas_rec", usar_decay=usar_decay, default=11.5)
-            friccion_idx = faltas_com + faltas_rec + amar_prop + amar_riv + rojas_prop + rojas_riv
-
-            return {
-                "n": n,
-                "v": v_cnt,
-                "e": e_cnt,
-                "d": d_cnt,
-                "win_rate": _media_ponderada_segura(df_norm, "win", usar_decay=usar_decay) * 100.0,
-                "draw_rate": _media_ponderada_segura(df_norm, "draw", usar_decay=usar_decay) * 100.0,
-                "loss_rate": _media_ponderada_segura(df_norm, "loss", usar_decay=usar_decay) * 100.0,
-                "gf_tot": gf_tot,
-                "gc_tot": gc_tot,
-                "gf_med": gf_med,
-                "gc_med": gc_med,
-                "xg_f": xg_f,
-                "xg_c": xg_c,
-                "xg_neto": xg_f - xg_c,
-                "diff_g_xg": gf_med - xg_f,
-                "tiros_f": tiros_f,
-                "tiros_c": tiros_c,
-                "sot_f": sot_f,
-                "sot_c": sot_c,
-                "conv_sot": conv_sot,
-                "conv_tiros": conv_tiros,
-                "atk_rating": atk_rating,
-                "def_rating": def_rating,
-                "over15": _media_ponderada_segura(df_norm, "over15", usar_decay=usar_decay) * 100.0,
-                "over25": _media_ponderada_segura(df_norm, "over25", usar_decay=usar_decay) * 100.0,
-                "over35": _media_ponderada_segura(df_norm, "over35", usar_decay=usar_decay) * 100.0,
-                "under25": _media_ponderada_segura(df_norm, "under25", usar_decay=usar_decay) * 100.0,
-                "btts_si": _media_ponderada_segura(df_norm, "btts_si", usar_decay=usar_decay) * 100.0,
-                "btts_no": _media_ponderada_segura(df_norm, "btts_no", usar_decay=usar_decay) * 100.0,
-                "clean_sheet": _media_ponderada_segura(df_norm, "clean_sheet", usar_decay=usar_decay) * 100.0,
-                "failed_to_score": _media_ponderada_segura(df_norm, "failed_to_score", usar_decay=usar_decay) * 100.0,
-                "over25_cnt": int(df_norm["over25"].sum()),
-                "btts_cnt": int(df_norm["btts_si"].sum()),
-                "cs_cnt": int(df_norm["clean_sheet"].sum()),
-                "gf_1t_pct": gf_1t_pct,
-                "gf_2t_pct": gf_2t_pct,
-                "gc_1t_pct": gc_1t_pct,
-                "gc_2t_pct": gc_2t_pct,
-                "amar_prop": amar_prop,
-                "rojas_prop": rojas_prop,
-                "amar_riv": amar_riv,
-                "rojas_riv": rojas_riv,
-                "faltas_com": faltas_com,
-                "faltas_rec": faltas_rec,
-                "friccion_idx": friccion_idx,
-            }
-
         # ── LAYER 3.1: TOP EXECUTIVE CONTROL (COMPETICIÓN + EQUIPO + HORIZONTE) ──
         col_div_d = _columna_liga_partidos(df_partidos_global)
         _CODIGOS_DOMESTICOS_DOSSIER = {"SP1", "SP2", "E0", "E1", "D1", "I1", "F1"}
@@ -4400,6 +4564,26 @@ elif menu_seleccionado == "📊 Dossier de Equipo":
             media_liga_away = float(pd.to_numeric(df_liga_ctx["FTAG"], errors="coerce").mean() or 1.15)
             media_liga_global = (media_liga_home + media_liga_away) / 2.0
 
+            # Muestra global de respaldo (partidos con datos completos de córners/tiros/faltas en SQLite/DataFrame)
+            df_eq_glob_all = _ordenar_por_fecha(
+                df_partidos_global[
+                    (df_partidos_global["HomeTeam"] == equipo_elegido)
+                    | (df_partidos_global["AwayTeam"] == equipo_elegido)
+                ].copy()
+            )
+            df_fb_norm_all = _normalizar_partidos_equipo(df_eq_glob_all, equipo_elegido)
+            if not df_fb_norm_all.empty and "corners_f" in df_fb_norm_all.columns:
+                df_fb_con_datos = df_fb_norm_all[df_fb_norm_all["corners_f"].notna()].copy()
+            else:
+                df_fb_con_datos = df_fb_norm_all.copy()
+            if "Últimos 10" in horizonte_muestra and not df_fb_con_datos.empty:
+                df_fb_con_datos = df_fb_con_datos.tail(10).copy()
+            elif "Temporada Actual" in horizonte_muestra and not df_fb_con_datos.empty:
+                df_fb_con_datos = df_fb_con_datos.tail(38).copy()
+
+            df_fb_home = df_fb_con_datos[df_fb_con_datos["es_local"]].copy() if not df_fb_con_datos.empty else pd.DataFrame()
+            df_fb_away = df_fb_con_datos[~df_fb_con_datos["es_local"]].copy() if not df_fb_con_datos.empty else pd.DataFrame()
+
             df_norm_global = _normalizar_partidos_equipo(df_muestra_raw, equipo_elegido)
             df_norm_home = df_norm_global[df_norm_global["es_local"]].copy() if not df_norm_global.empty else pd.DataFrame()
             df_norm_away = df_norm_global[~df_norm_global["es_local"]].copy() if not df_norm_global.empty else pd.DataFrame()
@@ -4409,18 +4593,21 @@ elif menu_seleccionado == "📊 Dossier de Equipo":
                 usar_decay=usar_decay_dossier,
                 media_liga_gf=media_liga_global,
                 media_liga_gc=media_liga_global,
+                df_fallback=df_fb_con_datos,
             )
             stats_home = _calcular_resumen_bloque(
                 df_norm_home,
                 usar_decay=usar_decay_dossier,
                 media_liga_gf=media_liga_home,
                 media_liga_gc=media_liga_away,
+                df_fallback=df_fb_home if not df_fb_home.empty else df_fb_con_datos,
             )
             stats_away = _calcular_resumen_bloque(
                 df_norm_away,
                 usar_decay=usar_decay_dossier,
                 media_liga_gf=media_liga_away,
                 media_liga_gc=media_liga_home,
+                df_fallback=df_fb_away if not df_fb_away.empty else df_fb_con_datos,
             )
 
             # Botón de exportación PDF ejecutiva preservado y alimentado por la muestra activa
@@ -4552,20 +4739,7 @@ elif menu_seleccionado == "📊 Dossier de Equipo":
                         delta_color="off",
                     )
                     st.dataframe(
-                        pd.DataFrame([
-                            {
-                                "Métrica Local": "Volumen de Tiro (Totales F / C)",
-                                "Valor": f"{stats_home['tiros_f']:.1f} realizados vs {stats_home['tiros_c']:.1f} concedidos ({stats_home['conv_tiros']:.1f}% conv. total)",
-                            },
-                            {
-                                "Métrica Local": "Distribución Goles 1T / 2T",
-                                "Valor": f"Anotados: {stats_home['gf_1t_pct']:.0f}% (1T) / {stats_home['gf_2t_pct']:.0f}% (2T) · Encajados: {stats_home['gc_1t_pct']:.0f}% (1T) / {stats_home['gc_2t_pct']:.0f}% (2T)",
-                            },
-                            {
-                                "Métrica Local": "Faltas y Tarjetas en Casa",
-                                "Valor": f"Faltas: {stats_home['faltas_com']:.1f} Com. / {stats_home['faltas_rec']:.1f} Rec. · Amarillas: {stats_home['amar_prop']:.2f} Prop. / {stats_home['amar_riv']:.2f} Riv.",
-                            },
-                        ]),
+                        _construir_tabla_rendimiento_condicion(stats_home, "Métrica Local"),
                         width="stretch",
                         hide_index=True,
                     )
@@ -4595,20 +4769,7 @@ elif menu_seleccionado == "📊 Dossier de Equipo":
                         delta_color="off",
                     )
                     st.dataframe(
-                        pd.DataFrame([
-                            {
-                                "Métrica Visitante": "Volumen de Tiro (Totales F / C)",
-                                "Valor": f"{stats_away['tiros_f']:.1f} realizados vs {stats_away['tiros_c']:.1f} concedidos ({stats_away['conv_tiros']:.1f}% conv. total)",
-                            },
-                            {
-                                "Métrica Visitante": "Distribución Goles 1T / 2T",
-                                "Valor": f"Anotados: {stats_away['gf_1t_pct']:.0f}% (1T) / {stats_away['gf_2t_pct']:.0f}% (2T) · Encajados: {stats_away['gc_1t_pct']:.0f}% (1T) / {stats_away['gc_2t_pct']:.0f}% (2T)",
-                            },
-                            {
-                                "Métrica Visitante": "Faltas y Tarjetas Fuera",
-                                "Valor": f"Faltas: {stats_away['faltas_com']:.1f} Com. / {stats_away['faltas_rec']:.1f} Rec. · Amarillas: {stats_away['amar_prop']:.2f} Prop. / {stats_away['amar_riv']:.2f} Riv.",
-                            },
-                        ]),
+                        _construir_tabla_rendimiento_condicion(stats_away, "Métrica Visitante"),
                         width="stretch",
                         hide_index=True,
                     )
@@ -5426,6 +5587,74 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
                         },
                     ])
                     st.dataframe(df_ah_justo, width="stretch", hide_index=True)
+
+            # ── 4B. ANÁLISIS COMPARATIVO: CONDICIÓN LOCAL VS CONDICIÓN VISITANTE ──
+            st.markdown("---")
+            st.subheader("🏠 Análisis Comparativo: Condición Local vs ✈️ Condición Visitante")
+
+            _df_h2h_norm_home = _normalizar_partidos_equipo(
+                df_eq1_all.tail(5) if relajo_local else df_eq1_home.tail(int(n_homogeneo_h2h)),
+                eq1,
+            )
+            _df_h2h_norm_away = _normalizar_partidos_equipo(
+                df_eq2_all.tail(5) if relajo_vis else df_eq2_away.tail(int(n_homogeneo_h2h)),
+                eq2,
+            )
+            _df_h2h_fb_home_all = _normalizar_partidos_equipo(
+                df_eq1_all_full[df_eq1_all_full["HomeTeam"] == eq1],
+                eq1,
+            )
+            _df_h2h_fb_away_all = _normalizar_partidos_equipo(
+                df_eq2_all_full[df_eq2_all_full["AwayTeam"] == eq2],
+                eq2,
+            )
+            if not _df_h2h_fb_home_all.empty and "corners_f" in _df_h2h_fb_home_all.columns:
+                _df_h2h_fb_home = _df_h2h_fb_home_all[_df_h2h_fb_home_all["corners_f"].notna()].tail(int(n_homogeneo_h2h)).copy()
+            else:
+                _df_h2h_fb_home = _df_h2h_fb_home_all.tail(int(n_homogeneo_h2h)).copy()
+
+            if not _df_h2h_fb_away_all.empty and "corners_f" in _df_h2h_fb_away_all.columns:
+                _df_h2h_fb_away = _df_h2h_fb_away_all[_df_h2h_fb_away_all["corners_f"].notna()].tail(int(n_homogeneo_h2h)).copy()
+            else:
+                _df_h2h_fb_away = _df_h2h_fb_away_all.tail(int(n_homogeneo_h2h)).copy()
+
+            _stats_h2h_home = _calcular_resumen_bloque(
+                _df_h2h_norm_home,
+                usar_decay=False,
+                media_liga_gf=_comp_hg_mean,
+                media_liga_gc=_comp_ag_mean,
+                df_fallback=_df_h2h_fb_home,
+            )
+            _stats_h2h_away = _calcular_resumen_bloque(
+                _df_h2h_norm_away,
+                usar_decay=False,
+                media_liga_gf=_comp_ag_mean,
+                media_liga_gc=_comp_hg_mean,
+                df_fallback=_df_h2h_fb_away,
+            )
+
+            col_h2h_lv1, col_h2h_lv2 = st.columns(2)
+            with col_h2h_lv1:
+                st.markdown(f"#### 🏠 Rendimiento en Casa ({_stats_h2h_home['n']} partidos) — {eq1}")
+                if _stats_h2h_home["n"] > 0:
+                    st.dataframe(
+                        _construir_tabla_rendimiento_condicion(_stats_h2h_home, "Métrica Local"),
+                        width="stretch",
+                        hide_index=True,
+                    )
+                else:
+                    st.info(f"Sin registros como local para {eq1}.")
+
+            with col_h2h_lv2:
+                st.markdown(f"#### ✈️ Rendimiento Fuera ({_stats_h2h_away['n']} partidos) — {eq2}")
+                if _stats_h2h_away["n"] > 0:
+                    st.dataframe(
+                        _construir_tabla_rendimiento_condicion(_stats_h2h_away, "Métrica Visitante"),
+                        width="stretch",
+                        hide_index=True,
+                    )
+                else:
+                    st.info(f"Sin registros como visitante para {eq2}.")
 
             # ── 5. TABLA DE FRECUENCIAS DE MERCADO (CONDICIONADA CASA VS FUERA) ──
             st.markdown("---")
