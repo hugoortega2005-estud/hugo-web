@@ -1272,29 +1272,260 @@ df_jugadores, err_jugadores = cargar_datos_jugadores()
 df_partidos = df_partidos_global.copy()
 
 # ==============================================================================
+# GESTIÓN GLOBAL DEL HISTORIAL DE NAVEGACIÓN (st.session_state)
+# ==============================================================================
+MODULO_INICIO = "🏠 Inicio / Portada"
+OPCIONES_MENU_GLOBAL = [
+    "🏠 Inicio / Portada",
+    "📡 Escáner Vivo EV+ (API)",
+    "📊 Dossier de Equipo",
+    "⚔️ Comparador H2H (Cara a Cara)",
+    "🎯 Radar de Tendencias",
+    "📋 Scouting de Jugadores",
+    "🤖 Motor de Apuestas (EV+)",
+    "⚖️ Directorio y Matchup Árbitros",
+    "🧮 Hándicap Asiático Avanzado",
+    "🎯 Escáner Autónomo de Ineficiencias (+EV Scanner)",
+    "🔗 Constructor Combinadas (EV+)",
+    "💸 Calculadora & Kelly",
+    "🤖 Asistente IA Local",
+]
+
+MAPA_BREADCRUMB_MODULOS = {
+    "🏠 Inicio / Portada": "Inicio / Portada",
+    "Inicio / Portada": "Inicio / Portada",
+    "📡 Escáner Vivo EV+ (API)": "Escáner Multimercado EV+",
+    "📊 Dossier de Equipo": "Dossier Cuantitativo de Equipo",
+    "⚔️ Comparador H2H (Cara a Cara)": "Comparador H2H Pro",
+    "🎯 Radar de Tendencias": "Radar de Tendencias",
+    "📋 Scouting de Jugadores": "Scouting de Jugadores Pro",
+    "🤖 Motor de Apuestas (EV+)": "Motor de Apuestas (EV+)",
+    "⚖️ Directorio y Matchup Árbitros": "Matchup de Árbitros & Tarjetas",
+    "🧮 Hándicap Asiático Avanzado": "Hándicap Asiático Avanzado",
+    "🎯 Escáner Autónomo de Ineficiencias (+EV Scanner)": "Escáner Autónomo (+EV Scanner)",
+    "🔗 Constructor Combinadas (EV+)": "Constructor Combinadas (EV+)",
+    "💸 Calculadora & Kelly": "Calculadora & Kelly",
+    "🤖 Asistente IA Local": "Asistente IA Local",
+}
+
+
+def _normalizar_modulo_nav(destino: str) -> str:
+    """Homogeneiza alias de navegación hacia las claves canónicas del menú lateral."""
+    if not destino or destino == "Inicio / Portada":
+        return MODULO_INICIO
+    return destino if destino in OPCIONES_MENU_GLOBAL else MODULO_INICIO
+
+
+if "menu_nav" not in st.session_state:
+    st.session_state["menu_nav"] = MODULO_INICIO
+else:
+    st.session_state["menu_nav"] = _normalizar_modulo_nav(st.session_state["menu_nav"])
+
+if (
+    "nav_history" not in st.session_state
+    or not isinstance(st.session_state["nav_history"], list)
+    or len(st.session_state["nav_history"]) == 0
+):
+    st.session_state["nav_history"] = [st.session_state["menu_nav"]]
+else:
+    st.session_state["nav_history"] = [
+        _normalizar_modulo_nav(m) for m in st.session_state["nav_history"]
+    ]
+
+if "nav_index" not in st.session_state:
+    st.session_state["nav_index"] = len(st.session_state["nav_history"]) - 1
+else:
+    st.session_state["nav_index"] = max(
+        0, min(int(st.session_state["nav_index"]), len(st.session_state["nav_history"]) - 1)
+    )
+
+
+def _registrar_navegacion(destino_menu: str) -> None:
+    """Registra un movimiento de módulo en la pila de historial evitando duplicados consecutivos."""
+    destino_norm = _normalizar_modulo_nav(destino_menu)
+    hist = list(st.session_state.get("nav_history", [MODULO_INICIO]))
+    idx = int(st.session_state.get("nav_index", max(0, len(hist) - 1)))
+    idx = max(0, min(idx, len(hist) - 1)) if hist else 0
+
+    # Si navegamos desde un punto intermedio del historial, truncamos la rama futura
+    hist = hist[: idx + 1] if hist else []
+    if not hist or hist[-1] != destino_norm:
+        hist.append(destino_norm)
+
+    st.session_state["nav_history"] = hist
+    st.session_state["nav_index"] = len(hist) - 1
+    st.session_state["menu_nav"] = destino_norm
+
+
+def _on_sidebar_nav_change() -> None:
+    """Callback disparado al cambiar manualmente el selector del menú lateral."""
+    destino_actual = st.session_state.get("menu_nav", MODULO_INICIO)
+    _registrar_navegacion(destino_actual)
+
+
+def _nav_ir_atras() -> None:
+    """Retrocede al módulo anterior en el historial de navegación."""
+    hist = list(st.session_state.get("nav_history", [MODULO_INICIO]))
+    idx = int(st.session_state.get("nav_index", 0))
+    if idx > 0 and len(hist) > 0:
+        nuevo_idx = idx - 1
+        st.session_state["nav_index"] = nuevo_idx
+        st.session_state["menu_nav"] = _normalizar_modulo_nav(hist[nuevo_idx])
+
+
+def _nav_ir_adelante() -> None:
+    """Avanza al módulo siguiente en el historial de navegación."""
+    hist = list(st.session_state.get("nav_history", [MODULO_INICIO]))
+    idx = int(st.session_state.get("nav_index", 0))
+    if idx < len(hist) - 1:
+        nuevo_idx = idx + 1
+        st.session_state["nav_index"] = nuevo_idx
+        st.session_state["menu_nav"] = _normalizar_modulo_nav(hist[nuevo_idx])
+
+
+def _nav_ir_portada() -> None:
+    """Regresa directamente a la pantalla principal registrando el paso en el historial."""
+    _registrar_navegacion(MODULO_INICIO)
+
+
+def render_top_navigation_bar() -> None:
+    """Renderiza la barra de navegación superior global (Atrás / Adelante / Portada + Breadcrumb)."""
+    hist = list(st.session_state.get("nav_history", [MODULO_INICIO]))
+    idx = int(st.session_state.get("nav_index", 0))
+    idx = max(0, min(idx, len(hist) - 1)) if hist else 0
+    modulo_actual = _normalizar_modulo_nav(
+        st.session_state.get("menu_nav", hist[idx] if hist else MODULO_INICIO)
+    )
+
+    puede_atras = idx > 0
+    puede_adelante = idx < (len(hist) - 1)
+    en_portada = modulo_actual == MODULO_INICIO
+
+    etiqueta_actual = MAPA_BREADCRUMB_MODULOS.get(
+        modulo_actual, modulo_actual.lstrip("🏠📡📊⚔️🎯📋🤖⚖️🧮🔗💸 ")
+    )
+    prev_hint = (
+        MAPA_BREADCRUMB_MODULOS.get(hist[idx - 1], hist[idx - 1])
+        if puede_atras
+        else "Inicio"
+    )
+
+    st.markdown(
+        """
+        <style>
+        .quant-topnav-shell {
+            background: linear-gradient(90deg, #161B26 0%, #1E232F 100%);
+            border: 1px solid #2A3245;
+            border-radius: 10px;
+            padding: 8px 14px;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            min-height: 38px;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+        }
+        .quant-breadcrumb-trail {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.84rem;
+            color: #94A3B8;
+            font-weight: 600;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .quant-breadcrumb-root {
+            color: #00E5FF;
+            font-weight: 800;
+            letter-spacing: 0.02em;
+        }
+        .quant-breadcrumb-sep {
+            color: #475569;
+            font-weight: 800;
+        }
+        .quant-breadcrumb-active {
+            color: #F8FAFC;
+            font-weight: 800;
+            background: rgba(0, 230, 118, 0.10);
+            border: 1px solid rgba(0, 230, 118, 0.30);
+            border-radius: 6px;
+            padding: 2px 9px;
+        }
+        .quant-breadcrumb-meta {
+            font-size: 0.72rem;
+            color: #64748B;
+            font-family: 'JetBrains Mono', 'Consolas', monospace;
+            background: rgba(14, 17, 23, 0.65);
+            border: 1px solid #2A3245;
+            border-radius: 6px;
+            padding: 2px 8px;
+            white-space: nowrap;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    col_back, col_fwd, col_home, col_crumb = st.columns([1.15, 1.25, 1.25, 5.35])
+    with col_back:
+        st.button(
+            "⬅ Atrás",
+            key="global_topnav_btn_back",
+            disabled=not puede_atras,
+            width="stretch",
+            help=f"Volver a: {prev_hint}" if puede_atras else "Sin historial previo",
+            on_click=_nav_ir_atras,
+        )
+    with col_fwd:
+        st.button(
+            "Adelante ➡",
+            key="global_topnav_btn_fwd",
+            disabled=not puede_adelante,
+            width="stretch",
+            help="Avanzar al módulo siguiente en el historial" if puede_adelante else "Sin historial posterior",
+            on_click=_nav_ir_adelante,
+        )
+    with col_home:
+        st.button(
+            "🏠 Portada",
+            key="global_topnav_btn_home",
+            disabled=en_portada,
+            width="stretch",
+            help="Regresar a la pantalla principal en 1 clic",
+            on_click=_nav_ir_portada,
+        )
+    with col_crumb:
+        st.markdown(
+            f"""
+            <div class="quant-topnav-shell">
+                <div class="quant-breadcrumb-trail">
+                    <span class="quant-breadcrumb-root">⚽ Hugo's Hub</span>
+                    <span class="quant-breadcrumb-sep">›</span>
+                    <span class="quant-breadcrumb-active">{etiqueta_actual}</span>
+                </div>
+                <span class="quant-breadcrumb-meta">Ruta {idx + 1}/{len(hist)}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+# ==============================================================================
 # SIDEBAR
 # ==============================================================================
 with st.sidebar:
     st.header("🎛️ Centro de Control")
     menu_seleccionado = st.radio(
-        "Navegación:", 
-        [
-            "🏠 Inicio / Portada", 
-            "📡 Escáner Vivo EV+ (API)", 
-            "📊 Dossier de Equipo",
-            "⚔️ Comparador H2H (Cara a Cara)",
-            "🎯 Radar de Tendencias", 
-            "📋 Scouting de Jugadores", 
-            "🤖 Motor de Apuestas (EV+)", 
-            "⚖️ Directorio y Matchup Árbitros", 
-            "🧮 Hándicap Asiático Avanzado", 
-            "🎯 Escáner Autónomo de Ineficiencias (+EV Scanner)",
-            "🔗 Constructor Combinadas (EV+)", 
-            "💸 Calculadora & Kelly",
-            "🤖 Asistente IA Local"
-        ],
-        key="menu_nav"
+        "Navegación:",
+        OPCIONES_MENU_GLOBAL,
+        key="menu_nav",
+        on_change=_on_sidebar_nav_change,
     )
+    # Sincronización defensiva por si menu_seleccionado divergió del tope actual
+    if st.session_state["nav_history"][st.session_state["nav_index"]] != menu_seleccionado:
+        _registrar_navegacion(menu_seleccionado)
     st.markdown("---")
     st.header("🌍 Filtro de Competición")
     if not df_partidos.empty and 'Div' in df_partidos.columns:
@@ -2143,25 +2374,531 @@ def ev_render_modulo():
 # ==============================================================================
 # NAVEGACIÓN Y SECCIONES
 # ==============================================================================
+render_top_navigation_bar()
 
 if menu_seleccionado == "🏠 Inicio / Portada":
-    st.title("⚽ Hugo's Hub: Sistema Analítico de Apuestas")
-    st.markdown("Plataforma avanzada de procesamiento de Big Data futbolístico y detección de valor matemático.")
-    st.markdown("---")
-    col_i1, col_i2 = st.columns(2)
-    with col_i1:
-        st.info("📌 **Estado del Sistema**")
-        st.markdown(f"- **Partidos indexados:** `{len(df_partidos_global)}` encuentros")
-        st.markdown(f"- **Jugadores indexados:** `{len(df_jugadores)}` futbolistas")
-        st.markdown("- **Conector API:** Sincronización estricta de múltiples mercados.")
-    with col_i2:
-        st.success("🚀 **Módulos Activos**")
-        st.markdown("- **Escáner EV+ Multimercado:** 1X2, Líneas Goles (+/-) y BTTS.")
-        st.markdown("- **Comparador H2H Pro:** Cuotas Justas y filtros Local/Visitante.")
-        st.markdown("- **Matchup de Árbitros:** Estimación de tarjetas.")
-        st.markdown("- **Dossier de Equipo:** Radiografía completa de promedios avanzados.")
-        st.markdown("- **Hándicap Asiático Pro:** Histórico ATS, Goles y Matriz Poisson.")
-        st.markdown("- **Scouting Métrico y Radares.**")
+    # ── 1. PALETA DE COLORES INSTITUCIONAL Y ESTILOS CSS INYECTADOS ──────────
+    st.markdown(
+        """
+        <style>
+        .quant-hero-box {
+            background: linear-gradient(135deg, #161B26 0%, #1E232F 58%, #131822 100%);
+            border: 1px solid #2A3245;
+            border-left: 4px solid #00E676;
+            border-radius: 14px;
+            padding: 26px 30px;
+            margin-bottom: 22px;
+            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.42);
+            position: relative;
+            overflow: hidden;
+        }
+        .quant-status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(0, 230, 118, 0.12);
+            color: #00E676;
+            border: 1px solid rgba(0, 230, 118, 0.38);
+            border-radius: 999px;
+            padding: 5px 14px;
+            font-size: 0.74rem;
+            font-weight: 800;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            margin-bottom: 12px;
+            box-shadow: 0 0 14px rgba(0, 230, 118, 0.16);
+        }
+        .quant-hero-title {
+            font-size: 2.05rem;
+            font-weight: 900;
+            color: #F8FAFC;
+            letter-spacing: -0.015em;
+            line-height: 1.18;
+            margin: 0 0 10px 0;
+        }
+        .quant-hero-title span {
+            color: #00E5FF;
+        }
+        .quant-hero-sub {
+            font-size: 0.96rem;
+            color: #94A3B8;
+            line-height: 1.55;
+            max-width: 920px;
+            margin: 0;
+        }
+        .quant-kpi-card {
+            background: linear-gradient(180deg, #1E232F 0%, #161B26 100%);
+            border: 1px solid #2A3245;
+            border-radius: 12px;
+            padding: 18px 20px;
+            min-height: 148px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+        }
+        .quant-kpi-card:hover {
+            transform: translateY(-2px);
+            border-color: #00E5FF;
+            box-shadow: 0 8px 22px rgba(0, 229, 255, 0.12);
+        }
+        .quant-kpi-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+        .quant-kpi-label {
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #94A3B8;
+        }
+        .quant-kpi-value {
+            font-size: 1.85rem;
+            font-weight: 900;
+            color: #F8FAFC;
+            line-height: 1.15;
+            margin: 2px 0 8px 0;
+        }
+        .quant-kpi-value .accent-green { color: #00E676; }
+        .quant-kpi-value .accent-cyan { color: #00E5FF; }
+        .quant-tag-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+            margin-top: 4px;
+        }
+        .quant-micro-tag {
+            background: rgba(42, 50, 69, 0.65);
+            color: #CBD5E1;
+            border: 1px solid #334155;
+            border-radius: 5px;
+            padding: 2px 7px;
+            font-size: 0.68rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+        }
+        .quant-micro-tag.cyan {
+            background: rgba(0, 229, 255, 0.10);
+            color: #38BDF8;
+            border-color: rgba(56, 189, 248, 0.32);
+        }
+        .quant-micro-tag.green {
+            background: rgba(16, 185, 129, 0.12);
+            color: #00E676;
+            border-color: rgba(16, 185, 129, 0.35);
+        }
+        .quant-micro-tag.amber {
+            background: rgba(245, 158, 11, 0.12);
+            color: #F59E0B;
+            border-color: rgba(245, 158, 11, 0.35);
+        }
+        .quant-section-hdr {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin: 26px 0 14px 0;
+            border-bottom: 1px solid #2A3245;
+            padding-bottom: 8px;
+        }
+        .quant-section-title {
+            font-size: 1.22rem;
+            font-weight: 800;
+            color: #F8FAFC;
+            letter-spacing: 0.01em;
+        }
+        .quant-section-caption {
+            font-size: 0.80rem;
+            color: #64748B;
+            font-weight: 600;
+        }
+        .quant-mod-card {
+            background: linear-gradient(180deg, #1E232F 0%, #161B26 100%);
+            border: 1px solid #2A3245;
+            border-radius: 12px;
+            padding: 20px 20px 14px 20px;
+            min-height: 190px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+        }
+        .quant-mod-card:hover {
+            transform: translateY(-2px);
+            border-color: #10B981;
+            box-shadow: 0 10px 26px rgba(16, 185, 129, 0.14);
+        }
+        .quant-mod-hdr {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .quant-mod-title {
+            font-size: 1.06rem;
+            font-weight: 800;
+            color: #F8FAFC;
+            line-height: 1.28;
+        }
+        .quant-mod-badge {
+            border-radius: 6px;
+            padding: 3px 9px;
+            font-size: 0.69rem;
+            font-weight: 800;
+            white-space: nowrap;
+            letter-spacing: 0.03em;
+        }
+        .quant-mod-desc {
+            font-size: 0.84rem;
+            color: #94A3B8;
+            line-height: 1.48;
+            margin-bottom: 10px;
+        }
+        .quant-step-box {
+            background: #161B26;
+            border: 1px solid #2A3245;
+            border-top: 3px solid #00E5FF;
+            border-radius: 10px;
+            padding: 16px 18px;
+            height: 100%;
+            transition: transform 0.18s ease, border-color 0.18s ease;
+        }
+        .quant-step-box:hover {
+            transform: translateY(-2px);
+            border-color: #00E676;
+        }
+        .quant-step-num {
+            display: inline-block;
+            background: rgba(0, 229, 255, 0.14);
+            color: #00E5FF;
+            border: 1px solid rgba(0, 229, 255, 0.35);
+            border-radius: 6px;
+            padding: 2px 8px;
+            font-size: 0.72rem;
+            font-weight: 800;
+            margin-bottom: 8px;
+        }
+        .quant-step-title {
+            font-size: 0.96rem;
+            font-weight: 800;
+            color: #F8FAFC;
+            margin-bottom: 6px;
+        }
+        .quant-step-txt {
+            font-size: 0.82rem;
+            color: #94A3B8;
+            line-height: 1.45;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ── CONSULTAS EN VIVO A SQLITE PARA LAS 4 TARJETAS KPI ───────────────────
+    _kpi_partidos_auditados = len(df_partidos_global) if isinstance(df_partidos_global, pd.DataFrame) else 0
+    _kpi_futbolistas_censo = 0
+    _kpi_futbolistas_unicos = 0
+    if RUTA_BD.exists():
+        try:
+            with sqlite3.connect(RUTA_BD) as _c_home:
+                _tablas_home = {
+                    r[0] for r in _c_home.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+                }
+                if "partidos" in _tablas_home:
+                    _n_p_tbl = int(_c_home.execute("SELECT COUNT(*) FROM partidos").fetchone()[0] or 0)
+                    _kpi_partidos_auditados = max(_kpi_partidos_auditados, _n_p_tbl)
+                if "historico_reciente" in _tablas_home:
+                    _n_hr_tbl = int(_c_home.execute("SELECT COUNT(*) FROM historico_reciente").fetchone()[0] or 0)
+                    _kpi_partidos_auditados = max(_kpi_partidos_auditados, _n_hr_tbl)
+                if "estadisticas_jugadores" in _tablas_home:
+                    _kpi_futbolistas_censo = int(
+                        _c_home.execute("SELECT COUNT(*) FROM estadisticas_jugadores").fetchone()[0] or 0
+                    )
+                    _kpi_futbolistas_unicos = int(
+                        _c_home.execute("SELECT COUNT(DISTINCT Jugador) FROM estadisticas_jugadores").fetchone()[0] or 0
+                    )
+        except Exception:
+            pass
+    if _kpi_futbolistas_censo == 0 and isinstance(df_jugadores, pd.DataFrame):
+        _kpi_futbolistas_censo = len(df_jugadores)
+        _kpi_futbolistas_unicos = len(df_jugadores)
+
+    # ── 2. HERO SECTION & HEADER STATUS ──────────────────────────────────────
+    st.markdown(
+        """
+        <div class="quant-hero-box">
+            <div class="quant-status-pill">🟢 MOTOR CUANTITATIVO ACTIVO &nbsp;|&nbsp; v3.0 MULTI-COMPETICIÓN</div>
+            <div class="quant-hero-title">⚽ HUGO'S HUB &nbsp;|&nbsp; <span>QUANT SPORTS INTELLIGENCE</span></div>
+            <p class="quant-hero-sub">
+                Plataforma analítica avanzada para detección de valor esperado (<b>EV+</b>), modelado predictivo
+                <b>Poisson con suavizado bayesiano</b> y <b>scouting métrico</b> en 8 competiciones de élite.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ── 3. KPI METRIC STRIP (4 TARJETAS DINÁMICAS HORIZONTALES) ──────────────
+    _fmt_partidos = f"{_kpi_partidos_auditados:,}".replace(",", ".")
+    _fmt_censo = f"{_kpi_futbolistas_censo:,}".replace(",", ".")
+    _fmt_unicos = f"{_kpi_futbolistas_unicos:,}".replace(",", ".")
+
+    hk1, hk2, hk3, hk4 = st.columns(4)
+    with hk1:
+        st.markdown(
+            f"""
+            <div class="quant-kpi-card">
+                <div>
+                    <div class="quant-kpi-top">
+                        <span class="quant-kpi-label">🗄️ Partidos Auditados</span>
+                        <span class="quant-micro-tag green">SQLite Sync</span>
+                    </div>
+                    <div class="quant-kpi-value"><span class="accent-cyan">{_fmt_partidos}+</span></div>
+                </div>
+                <div class="quant-tag-row">
+                    <span class="quant-micro-tag">Histórico Oficial</span>
+                    <span class="quant-micro-tag">Cuotas 1X2 / O-U</span>
+                    <span class="quant-micro-tag">ESPN Live</span>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with hk2:
+        st.markdown(
+            f"""
+            <div class="quant-kpi-card">
+                <div>
+                    <div class="quant-kpi-top">
+                        <span class="quant-kpi-label">🧬 Futbolistas Indexados</span>
+                        <span class="quant-micro-tag cyan">FBref + ESPN</span>
+                    </div>
+                    <div class="quant-kpi-value"><span class="accent-green">{_fmt_censo}</span></div>
+                </div>
+                <div class="quant-tag-row">
+                    <span class="quant-micro-tag green">{_fmt_unicos} Únicos</span>
+                    <span class="quant-micro-tag">Minutos Reales</span>
+                    <span class="quant-micro-tag">Tiros &amp; Faltas</span>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with hk3:
+        st.markdown(
+            """
+            <div class="quant-kpi-card">
+                <div>
+                    <div class="quant-kpi-top">
+                        <span class="quant-kpi-label">🏆 Competiciones Conectadas</span>
+                        <span class="quant-micro-tag amber">Top 5 + UEFA</span>
+                    </div>
+                    <div class="quant-kpi-value">8 Ligas &amp; Torneos</div>
+                </div>
+                <div class="quant-tag-row">
+                    <span class="quant-micro-tag cyan">LaLiga</span>
+                    <span class="quant-micro-tag cyan">Premier</span>
+                    <span class="quant-micro-tag cyan">Serie A</span>
+                    <span class="quant-micro-tag cyan">Bundesliga</span>
+                    <span class="quant-micro-tag cyan">Ligue 1</span>
+                    <span class="quant-micro-tag amber">UCL</span>
+                    <span class="quant-micro-tag amber">UEL</span>
+                    <span class="quant-micro-tag amber">UECL</span>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with hk4:
+        st.markdown(
+            """
+            <div class="quant-kpi-card">
+                <div>
+                    <div class="quant-kpi-top">
+                        <span class="quant-kpi-label">📐 Cobertura de Mercados</span>
+                        <span class="quant-micro-tag green">Overround 0%</span>
+                    </div>
+                    <div class="quant-kpi-value"><span class="accent-green">100%</span> Cobertura</div>
+                </div>
+                <div class="quant-tag-row">
+                    <span class="quant-micro-tag">1X2 Poisson</span>
+                    <span class="quant-micro-tag">xG Neto</span>
+                    <span class="quant-micro-tag">Over/Under</span>
+                    <span class="quant-micro-tag">BTTS</span>
+                    <span class="quant-micro-tag">Hándicap Asiático</span>
+                    <span class="quant-micro-tag">Props P90</span>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # ── 4. INTERACTIVE MODULE DIRECTORY (GRID DE NAVEGACIÓN 3x2) ─────────────
+    st.markdown(
+        """
+        <div class="quant-section-hdr">
+            <span class="quant-section-title">🧭 Directorio Interactivo de Módulos Cuantitativos</span>
+            <span class="quant-section-caption">Selecciona un motor analítico para abrirlo directamente</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    def _ir_a_modulo_hub(destino_menu: str) -> None:
+        _registrar_navegacion(destino_menu)
+
+    _catalogo_modulos_home = [
+        {
+            "id": "h2h",
+            "titulo": "⚔️ Comparador H2H Pro & Cuotas Justas",
+            "badge": "🟢 Calibrado",
+            "badge_style": "background:rgba(0,230,118,0.13);color:#00E676;border:1px solid rgba(0,230,118,0.38);",
+            "desc": (
+                "Estimación Poisson bivariante, suavizado bayesiano y balanceo de muestra oficial para torneos UEFA, "
+                "línea justa de Hándicap Asiático y calculadora interactiva Quarter-Kelly."
+            ),
+            "destino": "⚔️ Comparador H2H (Cara a Cara)",
+            "btn": "Abrir Comparador H2H ↗",
+        },
+        {
+            "id": "scouting",
+            "titulo": "📋 Scouting de Jugadores Pro",
+            "badge": "⚡ Multi-Competición",
+            "badge_style": "background:rgba(0,229,255,0.13);color:#00E5FF;border:1px solid rgba(0,229,255,0.38);",
+            "desc": (
+                "Filtro posicional estricto (POR, DFC, LI, LD, MCD, MC, MCO, EI, ED, DC), métricas P90 de tiros, "
+                "tiros a puerta, faltas y tarjetas, radar percentil H2H y enlace directo a SofaScore."
+            ),
+            "destino": "📋 Scouting de Jugadores",
+            "btn": "Abrir Scouting Pro ↗",
+        },
+        {
+            "id": "dossier",
+            "titulo": "📊 Dossier Cuantitativo de Equipo",
+            "badge": "🟢 Liga + UEFA",
+            "badge_style": "background:rgba(0,230,118,0.13);color:#00E676;border:1px solid rgba(0,230,118,0.38);",
+            "desc": (
+                "Radiografía institucional por competición (Liga Doméstica, Champions, Europa y Conference League), "
+                "eficiencia G-xG, ratings Casa/Fuera, matriz Over/Under y exportación ejecutiva en PDF."
+            ),
+            "destino": "📊 Dossier de Equipo",
+            "btn": "Abrir Dossier de Equipo ↗",
+        },
+        {
+            "id": "escaner_ev",
+            "titulo": "🎯 Escáner Multimercado EV+",
+            "badge": "🎯 Arbitraje EV+",
+            "badge_style": "background:rgba(245,158,11,0.15);color:#F59E0B;border:1px solid rgba(245,158,11,0.40);",
+            "desc": (
+                "Rastreador en tiempo real de ineficiencias entre probabilidad matemática propia y cuotas comerciales "
+                "de casas de apuestas en mercados 1X2, Over/Under 2.5 y BTTS con exportación a Excel."
+            ),
+            "destino": "📡 Escáner Vivo EV+ (API)",
+            "btn": "Abrir Escáner EV+ ↗",
+        },
+        {
+            "id": "arbitros",
+            "titulo": "⚖️ Matchup de Árbitros & Tarjetas",
+            "badge": "🟨 Severidad Arbitral",
+            "badge_style": "background:rgba(245,158,11,0.15);color:#F59E0B;border:1px solid rgba(245,158,11,0.40);",
+            "desc": (
+                "Auditoría de colegiados por liga, medias históricas de amonestaciones y expulsiones, y cruce "
+                "de fricción disciplinaria entre los dos clubes del encuentro."
+            ),
+            "destino": "⚖️ Directorio y Matchup Árbitros",
+            "btn": "Abrir Matchup Árbitros ↗",
+        },
+        {
+            "id": "handicap_radar",
+            "titulo": "🧮 Hándicap Asiático & Radar de Tendencias",
+            "badge": "⚡ Cuotas Implícitas",
+            "badge_style": "background:rgba(0,229,255,0.13);color:#00E5FF;border:1px solid rgba(0,229,255,0.38);",
+            "desc": (
+                "Simulador matricial de líneas asiáticas (-1.5 a +1.5) con liquidación exacta de medios cuartos "
+                "y detección de rachas estadísticas de alta frecuencia."
+            ),
+            "destino": "🧮 Hándicap Asiático Avanzado",
+            "btn": "Abrir Hándicap Asiático ↗",
+        },
+    ]
+
+    for _fila_idx in range(0, len(_catalogo_modulos_home), 3):
+        _cols_mod = st.columns(3)
+        for _col_i, _mod in enumerate(_catalogo_modulos_home[_fila_idx : _fila_idx + 3]):
+            with _cols_mod[_col_i]:
+                st.markdown(
+                    f"""
+                    <div class="quant-mod-card">
+                        <div>
+                            <div class="quant-mod-hdr">
+                                <div class="quant-mod-title">{_mod['titulo']}</div>
+                                <span class="quant-mod-badge" style="{_mod['badge_style']}">{_mod['badge']}</span>
+                            </div>
+                            <div class="quant-mod-desc">{_mod['desc']}</div>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                st.button(
+                    _mod["btn"],
+                    key=f"btn_home_nav_{_mod['id']}",
+                    width="stretch",
+                    type="primary" if _mod["id"] in ("h2h", "scouting", "dossier") else "secondary",
+                    on_click=_ir_a_modulo_hub,
+                    args=(_mod["destino"],),
+                )
+
+    # ── 5. ARQUITECTURA DE TRABAJO (QUICKSTART PROTOCOL EN 3 PASOS) ──────────
+    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+    with st.expander("🧭 Protocolo Institucional de Toma de Decisiones en 3 Pasos (Quickstart Protocol)", expanded=True):
+        qs1, qs2, qs3 = st.columns(3)
+        with qs1:
+            st.markdown(
+                """
+                <div class="quant-step-box">
+                    <span class="quant-step-num">PASO 01 · EXPLORACIÓN</span>
+                    <div class="quant-step-title">🔍 Radiografía de Competición y Plantilla</div>
+                    <div class="quant-step-txt">
+                        Selecciona el torneo objetivo (Liga Doméstica o UEFA) y audita el <b>Dossier de Equipo</b>
+                        y el <b>Scouting Pro</b> para identificar volumen de tiro P90, bajas, fricción de faltas y estado de forma.
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with qs2:
+            st.markdown(
+                """
+                <div class="quant-step-box">
+                    <span class="quant-step-num">PASO 02 · PROYECCIÓN</span>
+                    <div class="quant-step-title">⚖️ Modelado H2H con Muestra Balanceada</div>
+                    <div class="quant-step-txt">
+                        Cruza a ambos clubes en el <b>Comparador H2H Pro</b> activando la ventana homogénea de partidos
+                        oficiales y el factor de ventaja de campo para obtener <b>xG proyectados</b>, línea asiática justa y probabilidades reales.
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with qs3:
+            st.markdown(
+                """
+                <div class="quant-step-box">
+                    <span class="quant-step-num">PASO 03 · ARBITRAJE EV+</span>
+                    <div class="quant-step-title">💎 Ejecución Disciplinada &amp; Quarter-Kelly</div>
+                    <div class="quant-step-txt">
+                        Contrasta la <b>Cuota Justa (1/p)</b> del modelo frente a la cuota comercial de tu casa de apuestas
+                        y ejecuta únicamente posiciones con <b>Valor Esperado positivo (EV &gt; +2%)</b> dimensionando el stake con Quarter-Kelly.
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
 elif menu_seleccionado == "📡 Escáner Vivo EV+ (API)":
     st.markdown(
