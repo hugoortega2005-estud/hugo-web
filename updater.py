@@ -564,9 +564,15 @@ def _extraer_eventos_espn_liga(
 
         eventos = data.get("events") or []
         for event in eventos:
-            status_type = (event.get("status") or {}).get("type") or {}
-            if status_type.get("completed") is not True:
-                continue
+            status_obj = event.get("status") or {}
+            status_type = status_obj.get("type") or {}
+            is_completed = status_type.get("completed") is True
+            status_name = str(status_type.get("name") or status_type.get("state") or "").upper()
+
+            if not is_completed:
+                if not es_uefa:
+                    continue
+                # Para torneos UEFA se admiten partidos programados ('STATUS_SCHEDULED', 'pre' o sin marcador)
 
             competitions = event.get("competitions") or []
             if not competitions:
@@ -592,10 +598,9 @@ def _extraer_eventos_espn_liga(
                 or ""
             )
 
-            try:
-                goles_local = int(float(home_comp.get("score")))
-                goles_visitante = int(float(away_comp.get("score")))
-            except (TypeError, ValueError):
+            equipo_local = resolver_equipo_canonico(home_raw, mapa_equipos_bd)
+            equipo_visitante = resolver_equipo_canonico(away_raw, mapa_equipos_bd)
+            if not equipo_local or not equipo_visitante:
                 continue
 
             raw_date = comp.get("date") or event.get("date") or ""
@@ -603,17 +608,32 @@ def _extraer_eventos_espn_liga(
             if not fecha_ddmmyyyy:
                 continue
 
-            equipo_local = resolver_equipo_canonico(home_raw, mapa_equipos_bd)
-            equipo_visitante = resolver_equipo_canonico(away_raw, mapa_equipos_bd)
-            if not equipo_local or not equipo_visitante:
-                continue
+            if is_completed:
+                try:
+                    goles_local = int(float(home_comp.get("score")))
+                    goles_visitante = int(float(away_comp.get("score")))
+                    ftr = (
+                        "H" if goles_local > goles_visitante
+                        else ("A" if goles_visitante > goles_local else "D")
+                    )
+                except (TypeError, ValueError):
+                    continue
+            else:
+                goles_local = None
+                goles_visitante = None
+                ftr = None
 
-            ftr = (
-                "H" if goles_local > goles_visitante
-                else ("A" if goles_visitante > goles_local else "D")
-            )
+            _MAPA_DIV_UEFA = {
+                "uefa.champions": "UCL",
+                "uefa.europa": "UEL",
+                "uefa.europa.conf": "UECL",
+                "Champions League": "UCL",
+                "Europa League": "UEL",
+                "Conference League": "UECL",
+            }
+            div_canon = _MAPA_DIV_UEFA.get(liga, _MAPA_DIV_UEFA.get(liga_canon, liga))
 
-            clave = (liga_canon, fecha_ddmmyyyy, equipo_local, equipo_visitante)
+            clave = (div_canon, fecha_ddmmyyyy, equipo_local, equipo_visitante)
             if clave in vistos:
                 continue
             vistos.add(clave)
@@ -626,6 +646,7 @@ def _extraer_eventos_espn_liga(
                 "FTAG": goles_visitante,
                 "FTR": ftr,
                 "Liga_Origen": liga_canon,
+                "Div": div_canon,
                 "Temporada_Origen": TEMPORADA_ACTUAL,
             })
 
@@ -691,9 +712,9 @@ def ejecutar_tier2_espn(
             goles_local, goles_visitante, resultado, temporada, fuente
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(fecha, liga, equipo_local, equipo_visitante) DO UPDATE SET
-            goles_local     = excluded.goles_local,
-            goles_visitante = excluded.goles_visitante,
-            resultado       = excluded.resultado,
+            goles_local     = COALESCE(excluded.goles_local, partidos.goles_local),
+            goles_visitante = COALESCE(excluded.goles_visitante, partidos.goles_visitante),
+            resultado       = COALESCE(excluded.resultado, partidos.resultado),
             temporada       = COALESCE(partidos.temporada, excluded.temporada),
             fuente          = COALESCE(partidos.fuente, excluded.fuente)
     """
@@ -721,6 +742,7 @@ def ejecutar_tier2_espn(
             ftag_val = p["FTAG"]
             ftr_val = p["FTR"]
             liga_val = p["Liga_Origen"]
+            div_val = p.get("Div", liga_val)
             temp_val = p["Temporada_Origen"]
 
             try:
@@ -744,7 +766,7 @@ def ejecutar_tier2_espn(
                         cur.execute(
                             sql_insert,
                             (
-                                liga_val, date_val, home_val, away_val,
+                                div_val, date_val, home_val, away_val,
                                 fthg_val, ftag_val, ftr_val, liga_val, temp_val,
                             ),
                         )
@@ -769,7 +791,7 @@ def ejecutar_tier2_espn(
                         log.info(msg)
                 else:
                     rowid_ex, db_fthg, db_ftag = existente
-                    if db_fthg is None or db_ftag is None:
+                    if (db_fthg is None or db_ftag is None) and fthg_val is not None:
                         cur.execute(
                             sql_update,
                             (fthg_val, ftag_val, ftr_val, liga_val, temp_val, rowid_ex),
@@ -1776,26 +1798,29 @@ def sincronizar_jornada() -> dict:
         resultado["mensaje"] = "Sincronización fallida. Revisa los errores."
 
     lineas_detalle = (
-        "\n".join(f"  ✓ {d}" for d in resultado["partidos_añadidos_detalle"])
+        "\n".join(f"  [+] {d}" for d in resultado["partidos_añadidos_detalle"])
         if resultado["partidos_añadidos_detalle"]
-        else "  • (Ningún partido nuevo insertado en esta ejecución)"
+        else "  - (Ningún partido nuevo insertado en esta ejecución)"
     )
 
     resumen_stdout = (
         "\n============================================================\n"
         "[RESUMEN DE EJECUCIÓN - PIPELINE HÍBRIDO (CSV + ESPN API)]\n"
-        f"• Tier 1 (Football-Data CSV) -> Insertados: {resultado['tier1_insertados']} | "
+        f"- Tier 1 (Football-Data CSV) -> Insertados: {resultado['tier1_insertados']} | "
         f"Actualizados: {resultado['tier1_actualizados']}\n"
-        f"• Tier 2 (ESPN Live API)     -> Insertados: {resultado['tier2_insertados']} | "
+        f"- Tier 2 (ESPN Live API)     -> Insertados: {resultado['tier2_insertados']} | "
         f"Actualizados: {resultado['tier2_actualizados']}\n"
-        f"• Total Global               -> Insertados: {n_ins} | Actualizados: {m_act}\n"
-        f"• Tiempo de ejecución        -> {duracion:.2f} s\n"
+        f"- Total Global               -> Insertados: {n_ins} | Actualizados: {m_act}\n"
+        f"- Tiempo de ejecución        -> {duracion:.2f} s\n"
         "------------------------------------------------------------\n"
         "Confirmación de partidos añadidos:\n"
         f"{lineas_detalle}\n"
         "============================================================"
     )
-    print(resumen_stdout)
+    try:
+        print(resumen_stdout)
+    except UnicodeEncodeError:
+        print(resumen_stdout.encode("ascii", errors="replace").decode("ascii"))
     log.info(resumen_stdout)
     return resultado
 

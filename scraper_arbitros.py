@@ -13,6 +13,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 import logging
+import re
 import sqlite3
 import time
 import unicodedata
@@ -99,8 +100,26 @@ COMPETICIONES_ARBITROS = [
     {
         "div": "F1",
         "liga": "Ligue 1 (Francia)",
-        "comite": "FFF / DTA (Francia)",
+        "comite": "LFP / FFF (Francia)",
         "url": "https://www.transfermarkt.es/ligue-1/schiedsrichter/wettbewerb/FR1",
+    },
+    {
+        "div": "UCL",
+        "liga": "Champions League (UEFA)",
+        "comite": "Comité Arbitral UEFA",
+        "url": "https://www.transfermarkt.es/uefa-champions-league/schiedsrichter/wettbewerb/CL/saison_id/2026",
+    },
+    {
+        "div": "UEL",
+        "liga": "Europa League (UEFA)",
+        "comite": "Comité Arbitral UEFA",
+        "url": "https://www.transfermarkt.es/europa-league/schiedsrichter/wettbewerb/EL/saison_id/2026",
+    },
+    {
+        "div": "UECL",
+        "liga": "Conference League (UEFA)",
+        "comite": "Comité Arbitral UEFA",
+        "url": "https://www.transfermarkt.es/uefa-conference-league/schiedsrichter/wettbewerb/UCOL/saison_id/2026",
     },
 ]
 
@@ -155,78 +174,203 @@ def estimar_faltas_por_partido(media_amarillas: float, div_code: str) -> float:
     return round(base_liga + (media_amarillas * 1.45), 2)
 
 
-def extraer_arbitros_liga(comp: dict, session: requests.Session = None) -> list[dict]:
+def extraer_arbitros_liga(*args, **kwargs) -> list[dict]:
     """
     Descarga y parsea la tabla de árbitros de una competición desde Transfermarkt.
-    Devuelve una lista de diccionarios listos para insertar en `arbitros_stats`.
+    Soporta firmas polimórficas:
+      - extraer_arbitros_liga(session, comp_info)
+      - extraer_arbitros_liga(comp_info, session=session, html_content=html_content)
+    Devuelve una lista de diccionarios con el esquema canónico y relacional de arbitros_stats.
     """
-    own_session = session is None
+    session = kwargs.get("session")
+    comp_info = kwargs.get("comp_info") or kwargs.get("comp")
+    html_content = kwargs.get("html_content")
+
+    for arg in args:
+        if isinstance(arg, dict) and comp_info is None:
+            comp_info = arg
+        elif (
+            (hasattr(arg, "get") or hasattr(arg, "request"))
+            and session is None
+            and not isinstance(arg, dict)
+        ):
+            session = arg
+        elif isinstance(arg, str) and html_content is None:
+            html_content = arg
+
+    if comp_info is None:
+        comp_info = {}
+
+    own_session = session is None and html_content is None
     if own_session:
         session = _nueva_sesion()
 
-    url = comp["url"]
-    div_code = comp["div"]
-    liga_nombre = comp["liga"]
-    comite = comp["comite"]
-    resultados = []
+    div = comp_info.get("div", "")
+    liga_nombre = comp_info.get("liga", "")
+    comite = comp_info.get("comite", "Comité Arbitral")
+    url = comp_info.get("url", "")
 
     try:
-        html = _get_html(session, url)
-        if html is None:
+        html = html_content if html_content is not None else _get_html(session, url)
+        if not html:
+            # Reintento defensivo sin sufijo de temporada si venía con él
+            if "/saison_id/" in url:
+                url_alt = url.split("/saison_id/")[0]
+                html = _get_html(session, url_alt)
+
+        if not html:
+            log.warning(f"[{div}] No se pudo obtener respuesta HTTP válida de {url}")
             return []
+
         soup = BeautifulSoup(html, "html.parser")
 
-        tabla = soup.find("table", class_="items")
-        if not tabla or not tabla.find("tbody"):
-            log.warning(f"No se encontró tabla 'items' para {liga_nombre} ({url})")
+        # Selector en cascada: 1) table.items, 2) .responsive-table table, 3) tabla con enlaces a perfiles
+        tabla = soup.select_one("table.items") or soup.select_one("div.responsive-table table")
+
+        if not tabla:
+            # Búsqueda heurística entre todas las tablas del documento
+            for t in soup.find_all("table"):
+                if t.find("a", href=lambda href: href and "/profil/schiedsrichter/" in href):
+                    tabla = t
+                    break
+
+        # Reintento defensivo adicional para torneos UEFA/copas: endpoint 'pokalwettbewerb' si venía con 'wettbewerb'
+        if not tabla and "/wettbewerb/" in url:
+            url_pokal = url.replace("/wettbewerb/", "/pokalwettbewerb/")
+            html_p = _get_html(session, url_pokal)
+            if not html_p and "/saison_id/" in url_pokal:
+                url_p_alt = url_pokal.split("/saison_id/")[0]
+                html_p = _get_html(session, url_p_alt)
+            if html_p:
+                soup_p = BeautifulSoup(html_p, "html.parser")
+                tabla = soup_p.select_one("table.items") or soup_p.select_one("div.responsive-table table")
+                if not tabla:
+                    for t in soup_p.find_all("table"):
+                        if t.find("a", href=lambda href: href and "/profil/schiedsrichter/" in href):
+                            tabla = t
+                            break
+
+        if not tabla:
+            log.warning(f"[{div}] Estructura de tabla no localizada en {url}.")
             return []
 
-        filas = tabla.find("tbody").find_all("tr", recursive=False)
-        for tr in filas:
-            celdas = tr.find_all("td", recursive=False)
-            if len(celdas) < 6:
-                continue
+        # Mapeo dinámico de columnas por cabecera si thead está presente
+        idx_col_partidos = -1
+        idx_col_amarillas = -1
+        idx_col_segundas = -1
+        idx_col_rojas = -1
+        thead = tabla.find("thead")
+        if thead:
+            for i, th in enumerate(thead.find_all("th")):
+                th_str = str(th).lower()
+                if "einsaetze" in th_str or "alineaciones" in th_str or "spiele" in th_str:
+                    idx_col_partidos = i
+                elif "gelbrote" in th_str or "gelb-rote" in th_str or "segundas" in th_str:
+                    idx_col_segundas = i
+                elif "gelbe" in th_str or "amarillas" in th_str:
+                    idx_col_amarillas = i
+                elif "rote" in th_str or "rojas" in th_str:
+                    idx_col_rojas = i
 
-            # Nombre del árbitro dentro de <td class="hauptlink"><a>
-            celda_nombre = tr.find("td", class_="hauptlink")
-            tag_a = celda_nombre.find("a") if celda_nombre else celdas[0].find("a")
-            nombre = tag_a.get_text(strip=True) if tag_a else celdas[0].get_text(strip=True)
-            if not nombre:
-                continue
+        tbody = tabla.find("tbody") or tabla
+        filas = tbody.find_all("tr", recursive=False)
+        if not filas:
+            filas = tbody.find_all("tr")
 
-            partidos = _parse_int(celdas[2].get_text(strip=True))
-            if partidos <= 0:
-                continue
-
-            total_amarillas = _parse_int(celdas[3].get_text(strip=True))
-            total_segundas_amarillas = _parse_int(celdas[4].get_text(strip=True))
-            total_rojas_directas = _parse_int(celdas[5].get_text(strip=True))
-            total_rojas = total_segundas_amarillas + total_rojas_directas
-
-            media_amarillas = round(total_amarillas / partidos, 2)
-            media_rojas = round(total_rojas / partidos, 2)
-            perfil = clasificar_perfil_disciplinario(media_amarillas)
-            media_faltas = estimar_faltas_por_partido(media_amarillas, div_code)
-
-            resultados.append(
-                {
-                    "Árbitro": nombre,
-                    "Div": div_code,
-                    "Liga": liga_nombre,
-                    "Comité": comite,
-                    "Partidos": partidos,
-                    "Perfil Disciplinario": perfil,
-                    "Media Amarillas Est.": media_amarillas,
-                    "Media Rojas": media_rojas,
-                    "Media Faltas": media_faltas,
-                }
+        resultados = []
+        for fila in filas:
+            # Localizar celda/enlace del colegiado
+            link_ref = fila.find(
+                "a",
+                href=lambda href: href
+                and ("/profil/schiedsrichter/" in href or "/schiedsrichter/" in href),
             )
+            if not link_ref:
+                continue
 
-        log.info(f"  ✔ {liga_nombre} ({div_code}): {len(resultados)} árbitros extraídos.")
+            nombre_ref = link_ref.get_text(strip=True)
+            if not nombre_ref or len(nombre_ref) < 3:
+                continue
+
+            # Extraer celdas numéricas de la fila
+            tds = fila.find_all("td", recursive=False)
+            if not tds:
+                tds = fila.find_all("td")
+
+            textos_td = [td.get_text(strip=True).replace("-", "0") for td in tds]
+
+            # Buscar valores numéricos de partidos y tarjetas
+            numeros = []
+            for txt in textos_td:
+                limpio = re.sub(r"[^\d]", "", txt)
+                if limpio.isdigit():
+                    numeros.append(int(limpio))
+
+            # En la estructura Transfermarkt estándar:
+            # columnas habituales tras el nombre: [Edad/Nacionalidad] -> Partidos -> Amarillas -> Dobles Amarillas -> Rojas -> Penaltis
+            partidos = 0
+            amarillas = 0
+            rojas = 0
+            faltas = 0.0  # Transfermarkt no audita faltas de equipo; se inicializa a 0.0 para compatibilidad con la BD
+
+            if idx_col_partidos != -1 and len(tds) > max(idx_col_partidos, idx_col_amarillas):
+                def _num_td(idx):
+                    if 0 <= idx < len(tds):
+                        clean = re.sub(r"[^\d]", "", tds[idx].get_text(strip=True).replace("-", "0"))
+                        return int(clean) if clean.isdigit() else 0
+                    return 0
+
+                partidos = _num_td(idx_col_partidos)
+                amarillas = _num_td(idx_col_amarillas)
+                rojas = _num_td(idx_col_segundas) + _num_td(idx_col_rojas)
+            else:
+                if len(numeros) >= 1:
+                    partidos = numeros[0]
+                if len(numeros) >= 2:
+                    amarillas = numeros[1]
+                if len(numeros) >= 4:
+                    # Suma de segundas amarillas + rojas directas
+                    rojas = numeros[2] + numeros[3]
+                elif len(numeros) >= 3:
+                    rojas = numeros[2]
+
+            if partidos > 0:
+                media_amarillas = round(amarillas / partidos, 2)
+                media_rojas = round(rojas / partidos, 2)
+
+                perfil = "Medio"
+                if media_amarillas >= 5.0:
+                    perfil = "Alto"
+                elif media_amarillas <= 3.8:
+                    perfil = "Permisivo"
+
+                resultados.append(
+                    {
+                        "referee": nombre_ref,
+                        "comp": div,
+                        "partidos": partidos,
+                        "media_amarillas": media_amarillas,
+                        "media_rojas": media_rojas,
+                        "media_faltas": faltas,
+                        "perfil": perfil,
+                        # Claves para compatibilidad con el esquema relacional de SQLite y dashboard.py
+                        "Árbitro": nombre_ref,
+                        "Div": div,
+                        "Liga": liga_nombre,
+                        "Comité": comite,
+                        "Partidos": partidos,
+                        "Perfil Disciplinario": perfil,
+                        "Media Amarillas Est.": media_amarillas,
+                        "Media Rojas": media_rojas,
+                        "Media Faltas": faltas,
+                    }
+                )
+
+        log.info(f"[{div}] {len(resultados)} colegiados extraídos satisfactoriamente.")
         return resultados
 
     except Exception as exc:
-        log.warning(f"  Error extrayendo árbitros de {liga_nombre}: {exc}")
+        log.warning(f"[{div}] Error extrayendo árbitros de {liga_nombre}: {exc}")
         return []
     finally:
         if own_session:
@@ -278,20 +422,34 @@ def _sincronizar_arbitros_web(conn: sqlite3.Connection = None) -> tuple[int, lis
         session = _nueva_sesion()
         todos_registros = []
 
-        for idx, comp in enumerate(COMPETICIONES_ARBITROS):
+        for idx, comp_info in enumerate(COMPETICIONES_ARBITROS):
             if idx > 0:
                 time.sleep(1.0)
-            registros_liga = extraer_arbitros_liga(comp, session=session)
-            if registros_liga:
-                todos_registros.extend(registros_liga)
+            div = comp_info.get("div")
+            liga_nombre = comp_info.get("liga")
+            url_tm = comp_info.get("url")
+
+            print(f"\n[+] Procesando: {liga_nombre} ({div}) -> {url_tm}")
+            html_content = _get_html(session, url_tm)
+
+            if html_content is None:
+                print(f"    [!] Fallo HTTP/Bloqueo en {div}. Intentando recálculo fallback desde BD local...")
+                errores.append(f"Sin datos de árbitros para {liga_nombre}")
             else:
-                errores.append(f"Sin datos de árbitros para {comp['liga']}")
+                print(f"    [OK] HTML recibido ({len(html_content)} bytes). Parseando tabla Transfermarkt...")
+                registros_liga = extraer_arbitros_liga(
+                    comp_info, session=session, html_content=html_content
+                )
+                if registros_liga:
+                    todos_registros.extend(registros_liga)
+                else:
+                    errores.append(f"Sin datos de árbitros para {liga_nombre}")
 
         session.close()
 
         if todos_registros:
             # Reemplazar los registros de las ligas sincronizadas exitosamente
-            divs_exitosas = list({r["Div"] for r in todos_registros})
+            divs_exitosas = list({r.get("Div") or r.get("comp") for r in todos_registros})
             placeholders_div = ", ".join(["?" for _ in divs_exitosas])
             cur.execute(
                 f'DELETE FROM arbitros_stats WHERE "Div" IN ({placeholders_div})',
@@ -308,15 +466,21 @@ def _sincronizar_arbitros_web(conn: sqlite3.Connection = None) -> tuple[int, lis
                 cur.execute(
                     sql_upsert,
                     (
-                        reg["Árbitro"],
-                        reg["Div"],
-                        reg["Liga"],
-                        reg["Comité"],
-                        reg["Partidos"],
-                        reg["Perfil Disciplinario"],
-                        reg["Media Amarillas Est."],
-                        reg["Media Rojas"],
-                        reg["Media Faltas"],
+                        reg.get("Árbitro") or reg.get("referee"),
+                        reg.get("Div") or reg.get("comp"),
+                        reg.get("Liga") or reg.get("comp"),
+                        reg.get("Comité") or "Comité Arbitral",
+                        reg.get("Partidos") if reg.get("Partidos") is not None else reg.get("partidos", 0),
+                        reg.get("Perfil Disciplinario") or reg.get("perfil", "Medio"),
+                        reg.get("Media Amarillas Est.")
+                        if reg.get("Media Amarillas Est.") is not None
+                        else reg.get("media_amarillas", 0.0),
+                        reg.get("Media Rojas")
+                        if reg.get("Media Rojas") is not None
+                        else reg.get("media_rojas", 0.0),
+                        reg.get("Media Faltas")
+                        if reg.get("Media Faltas") is not None
+                        else reg.get("media_faltas", 0.0),
                     ),
                 )
                 total_actualizados += 1
@@ -427,13 +591,13 @@ def _sincronizar_arbitros_local(conn: sqlite3.Connection) -> tuple[int, list[str
 
 
 def sincronizar_arbitros(
-    conn: sqlite3.Connection = None, usar_web: bool = False
+    conn: sqlite3.Connection = None, usar_web: bool = True
 ) -> tuple[int, list[str]]:
     """
-    Actualiza `arbitros_stats` sin llamadas externas: recalcula con SQL, desde
-    `historico_reciente`, las ligas que traen la columna `Referee`. El resto de
-    ligas conserva intactos sus registros. La vía web (Transfermarkt) es opcional
-    (`usar_web=True`) y sus fallos quedan silenciados.
+    Actualiza `arbitros_stats` ejecutando la extracción web (Transfermarkt) para
+    todas las competiciones de COMPETICIONES_ARBITROS (incluyendo UCL, UEL, UECL)
+    y aplicando recálculo fallback con SQL desde `historico_reciente` para las
+    ligas con columna `Referee`.
 
     Returns:
         (total_arbitros_actualizados: int, errores: list[str])
@@ -445,13 +609,18 @@ def sincronizar_arbitros(
 
     try:
         _garantizar_esquema_arbitros(conn)
-        total, errores = _sincronizar_arbitros_local(conn)
+        total = 0
+        errores: list[str] = []
         if usar_web:
             try:
-                t_web, _ = _sincronizar_arbitros_web(conn)
+                t_web, errs_web = _sincronizar_arbitros_web(conn)
                 total += t_web
+                errores.extend(errs_web)
             except Exception as exc:
                 log.info(f"[Silenciado] Vía web de árbitros omitida: {exc}")
+        t_local, errs_local = _sincronizar_arbitros_local(conn)
+        total += t_local
+        errores.extend(errs_local)
         return total, errores
     finally:
         if cerrar_conn:
@@ -459,7 +628,7 @@ def sincronizar_arbitros(
 
 
 if __name__ == "__main__":
-    total, errs = sincronizar_arbitros()
+    total, errs = sincronizar_arbitros(usar_web=True)
     print(f"\nResumen sincronización árbitros: {total} colegiados actualizados.")
     if errs:
         print("Avisos:", errs)
@@ -468,11 +637,18 @@ if __name__ == "__main__":
         resumen = _conn.execute(
             'SELECT "Liga", "Div", COUNT(*), MIN("Partidos"), MAX("Partidos"), '
             'ROUND(AVG("Media Amarillas Est."), 2) '
-            'FROM arbitros_stats GROUP BY "Liga", "Div" ORDER BY "Liga"'
+            'FROM arbitros_stats '
+            "WHERE \"Div\" IN ('SP1', 'E0', 'I1', 'D1', 'F1', 'UCL', 'UEL', 'UECL') "
+            'GROUP BY "Liga", "Div" ORDER BY "Liga"'
         ).fetchall()
         print("\nDistribución en BD (arbitros_stats):")
+        divs_presentes = set()
         for fila in resumen:
+            divs_presentes.add(fila[1])
             print(
                 f"  - {fila[0]} ({fila[1]}): {fila[2]} árbitros | "
                 f"Partidos [{fila[3]}..{fila[4]}] | Media Amarillas: {fila[5]}"
             )
+        for div_uefa in ("UCL", "UEL", "UECL"):
+            if div_uefa not in divs_presentes:
+                print(f"  - [{div_uefa}]: 0 árbitros en arbitros_stats (sin datos extraídos)")
