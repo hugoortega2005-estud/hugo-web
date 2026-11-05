@@ -833,6 +833,7 @@ _COLUMNAS_JUGADORES_BASE = [
     ("tarjetas_amarillas", "REAL DEFAULT 0"), ("tarjetas_rojas", "REAL DEFAULT 0"),
     ("tiros_totales", "INTEGER"), ("tiros_a_puerta", "INTEGER"),
     ("faltas_cometidas", "REAL"), ("Faltas_Recibidas", "REAL"),
+    ("tiros_p90", "REAL DEFAULT 0.0"), ("sot_p90", "REAL DEFAULT 0.0"), ("faltas_p90", "REAL DEFAULT 0.0"),
     ("fueras_juego", "INTEGER DEFAULT 0"), ("entradas_tackles", "INTEGER DEFAULT 0"),
     ("Pases_Intentados", "REAL"), ("Pases_Completados", "REAL"), ("Pases_Clave", "REAL"),
     ("Entradas", "REAL"), ("Entradas_Ganadas", "REAL"), ("Intercepciones", "REAL"),
@@ -1153,16 +1154,36 @@ def armonizar_clubes_estadisticas_jugadores(conn: sqlite3.Connection) -> dict:
                     es = base if fb is d else d
 
                 pos_f = fb[3] if (fb[3] and fb[3] != "S/P") else (es[3] or "S/P")
-                min_f = float(fb[4] if fb[4] is not None else (es[4] or 0.0))
-                # En ligas domésticas y UEFA, los partidos_jugados ('MP') y titularidades ('Starts')
-                # de FBref son la fuente canónica exacta (incluso si MP=0).
-                pj_f = int(fb[5] if fb[5] is not None else (es[5] or 0))
-                tit_f = int(fb[6] if fb[6] is not None else (es[6] or 0))
-                gol_f = float(fb[7] if fb[7] is not None else (es[7] or 0.0))
-                ast_f = float(fb[8] if fb[8] is not None else (es[8] or 0.0))
+                min_fb = float(fb[4] if fb[4] is not None else 0.0)
+                pj_fb = int(fb[5] if fb[5] is not None else 0)
+                tit_fb = int(fb[6] if fb[6] is not None else 0)
+                pj_es = int(es[5] or 0)
+                tit_es = int(es[6] or 0)
+
+                minutos = min_fb if fb[4] is not None else float(es[4] or 0.0)
+                partidos_jugados = pj_fb if fb[5] is not None else pj_es
+                titularidades = tit_fb if fb[6] is not None else tit_es
+
+                if pj_es > partidos_jugados:
+                    delta_pj = pj_es - partidos_jugados
+                    delta_tit = max(tit_es - titularidades, 0)
+                    for idx_m in range(delta_pj):
+                        en_once = idx_m < delta_tit
+                        minutos_partido = 80.0 if en_once else 25.0
+                        if minutos_partido > 0:
+                            partidos_jugados = partidos_jugados + 1
+                        if en_once:
+                            titularidades = titularidades + 1
+                        minutos = minutos + minutos_partido
+
+                min_f = minutos
+                pj_f = partidos_jugados
+                tit_f = titularidades
+                gol_f = max(float(fb[7] or 0.0), float(es[7] or 0.0))
+                ast_f = max(float(fb[8] or 0.0), float(es[8] or 0.0))
                 xg_f = max(float(fb[9] or 0.0), float(es[9] or 0.0))
-                crd_y = float(fb[10] if fb[10] is not None else (es[10] or 0.0))
-                crd_r = float(fb[11] if fb[11] is not None else (es[11] or 0.0))
+                crd_y = max(float(fb[10] or 0.0), float(es[10] or 0.0))
+                crd_r = max(float(fb[11] or 0.0), float(es[11] or 0.0))
 
                 tiros_t = es[12] if es[12] is not None else fb[12]
                 tiros_p = es[13] if es[13] is not None else fb[13]
@@ -1177,6 +1198,13 @@ def armonizar_clubes_estadisticas_jugadores(conn: sqlite3.Connection) -> dict:
                 ent_g = es[22] if es[22] is not None else fb[22]
                 inter = es[23] if es[23] is not None else fb[23]
 
+                tiros_totales = float(tiros_t or 0.0)
+                tiros_a_puerta = float(tiros_p or 0.0)
+                faltas_cometidas = float(faltas_c or 0.0)
+                tiros_p90 = round((tiros_totales * 90.0) / max(minutos, 1.0), 2)
+                sot_p90 = round((tiros_a_puerta * 90.0) / max(minutos, 1.0), 2)
+                faltas_p90 = round((faltas_cometidas * 90.0) / max(minutos, 1.0), 2)
+
                 cur.execute("DELETE FROM estadisticas_jugadores WHERE rowid = ?", (rid,))
                 cur.execute(
                     """
@@ -1184,6 +1212,7 @@ def armonizar_clubes_estadisticas_jugadores(conn: sqlite3.Connection) -> dict:
                     SET Equipo=?, posicion=?, minutos=?, partidos_jugados=?, titularidades=?,
                         goles=?, asistencias=?, xg=?, tarjetas_amarillas=?, tarjetas_rojas=?,
                         tiros_totales=?, tiros_a_puerta=?, faltas_cometidas=?, Faltas_Recibidas=?,
+                        tiros_p90=?, sot_p90=?, faltas_p90=?,
                         fueras_juego=?, entradas_tackles=?, Pases_Intentados=?, Pases_Completados=?,
                         Pases_Clave=?, Entradas=?, Entradas_Ganadas=?, Intercepciones=?
                     WHERE rowid=?
@@ -1192,6 +1221,7 @@ def armonizar_clubes_estadisticas_jugadores(conn: sqlite3.Connection) -> dict:
                         eq_canon, pos_f, min_f, pj_f, tit_f,
                         gol_f, ast_f, xg_f, crd_y, crd_r,
                         tiros_t, tiros_p, faltas_c, faltas_r,
+                        tiros_p90, sot_p90, faltas_p90,
                         fueras_j, tackles, p_int, p_cmp,
                         p_clv, ent, ent_g, inter,
                         match_rid,
@@ -1252,8 +1282,8 @@ INSERT INTO estadisticas_jugadores
     (Jugador, Equipo, posicion, minutos, partidos_jugados, titularidades,
      goles, asistencias, tiros_totales, tiros_a_puerta, faltas_cometidas, Faltas_Recibidas,
      tarjetas_amarillas, tarjetas_rojas, fueras_juego, entradas_tackles, Pases_Completados,
-     competicion)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     tiros_p90, sot_p90, faltas_p90, competicion)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(Jugador, Equipo, competicion) DO UPDATE SET
     posicion=excluded.posicion, minutos=excluded.minutos,
     partidos_jugados=excluded.partidos_jugados, titularidades=excluded.titularidades,
@@ -1262,7 +1292,8 @@ ON CONFLICT(Jugador, Equipo, competicion) DO UPDATE SET
     faltas_cometidas=excluded.faltas_cometidas, Faltas_Recibidas=excluded.Faltas_Recibidas,
     tarjetas_amarillas=excluded.tarjetas_amarillas, tarjetas_rojas=excluded.tarjetas_rojas,
     fueras_juego=excluded.fueras_juego, entradas_tackles=excluded.entradas_tackles,
-    Pases_Completados=excluded.Pases_Completados
+    Pases_Completados=excluded.Pases_Completados,
+    tiros_p90=excluded.tiros_p90, sot_p90=excluded.sot_p90, faltas_p90=excluded.faltas_p90
 """
 
 
@@ -1274,9 +1305,16 @@ SET tiros_totales      = ?,
     Faltas_Recibidas   = ?,
     fueras_juego       = ?,
     posicion           = CASE WHEN posicion IS NULL OR posicion IN ('', 'S/P') THEN ? ELSE posicion END,
-    minutos            = CASE WHEN minutos IS NULL OR minutos <= 0 THEN ? ELSE minutos END,
-    partidos_jugados   = CASE WHEN partidos_jugados IS NULL OR partidos_jugados <= 0 THEN ? ELSE partidos_jugados END,
-    titularidades      = CASE WHEN titularidades IS NULL OR titularidades <= 0 THEN ? ELSE titularidades END
+    minutos            = ?,
+    partidos_jugados   = ?,
+    titularidades      = ?,
+    goles              = ?,
+    asistencias        = ?,
+    tarjetas_amarillas = ?,
+    tarjetas_rojas     = ?,
+    tiros_p90          = ?,
+    sot_p90            = ?,
+    faltas_p90         = ?
 WHERE rowid = ?
 """
 
@@ -1290,9 +1328,8 @@ def sincronizar_estadisticas_jugadores(conn: sqlite3.Connection) -> int:
     - Para torneos europeos (Champions League, Europa League, Conference League):
       NO purga las filas existentes de FBref ni sobreescribe `minutos`, `partidos_jugados`
       o `titularidades` cuando ya vienen de FBref; hace coincidencia difusa por jugador
-      dentro del club y actualiza quirúrgicamente `tiros_totales`, `tiros_a_puerta`,
-      `faltas_cometidas`, `Faltas_Recibidas` y `fueras_juego` (o inserta el jugador si
-      solo tiene minutos/apariciones en ESPN).
+      dentro del club, incrementa `partidos_jugados`, `titularidades` y `minutos` por cada
+      nuevo partido disputado, y recalcula atómicamente `tiros_p90`, `sot_p90` y `faltas_p90`.
     """
     total_jugadores_actualizados = 0
     try:
@@ -1342,19 +1379,38 @@ def sincronizar_estadisticas_jugadores(conn: sqlite3.Connection) -> int:
                     pos_obj = a.get("position") or {}
                     pos_raw = str(pos_obj.get("abbreviation") or pos_obj.get("displayName") or "").strip()
                     s = _stats_roster_plano(a)
-                    pj = int(s.get("appearances", 0))
-                    subs = int(s.get("subIns", 0))
-                    tit = max(pj - subs, 0)
-                    minutos = float(tit * 80 + subs * 25)
+                    pj_espn = int(s.get("appearances", 0))
+                    subs_espn = int(s.get("subIns", 0))
+                    tit_espn = max(pj_espn - subs_espn, 0)
+                    partidos_jugados = 0
+                    titularidades = 0
+                    minutos = 0.0
+                    for idx_m in range(pj_espn):
+                        en_once = idx_m < tit_espn
+                        minutos_partido = 80.0 if en_once else 25.0
+                        if minutos_partido > 0:
+                            partidos_jugados = partidos_jugados + 1
+                        if en_once:
+                            titularidades = titularidades + 1
+                        minutos = minutos + minutos_partido
+
                     goles = int(s.get("totalGoals", 0))
                     asist = int(s.get("goalAssists", 0))
+                    tiros_totales = int(s.get("totalShots", 0))
+                    tiros_a_puerta = int(s.get("shotsOnTarget", 0))
+                    faltas_cometidas = int(s.get("foulsCommitted", 0))
+                    faltas_recibidas = int(s.get("foulsSuffered", 0))
+                    tiros_p90 = round((tiros_totales * 90.0) / max(minutos, 1.0), 2)
+                    sot_p90 = round((tiros_a_puerta * 90.0) / max(minutos, 1.0), 2)
+                    faltas_p90 = round((faltas_cometidas * 90.0) / max(minutos, 1.0), 2)
                     tuplas_club.append((
                         nombre, equipo_normalizado, _normalizar_posicion_tactica(pos_raw),
-                        minutos, pj, tit, goles, asist,
-                        int(s.get("totalShots", 0)), int(s.get("shotsOnTarget", 0)),
-                        int(s.get("foulsCommitted", 0)), int(s.get("foulsSuffered", 0)),
+                        minutos, partidos_jugados, titularidades, goles, asist,
+                        tiros_totales, tiros_a_puerta,
+                        faltas_cometidas, faltas_recibidas,
                         int(s.get("yellowCards", 0)), int(s.get("redCards", 0)),
                         int(s.get("offsides", 0)), 0, 0,
+                        tiros_p90, sot_p90, faltas_p90,
                         comp_nombre,
                     ))
                 if not tuplas_club:
@@ -1381,20 +1437,31 @@ def sincronizar_estadisticas_jugadores(conn: sqlite3.Connection) -> int:
                 total_jugadores_actualizados += len(unicas)
                 log.info(f"  [Jugadores - {comp_nombre}] {len(unicas)} jugadores sincronizados ({len(purgas)} clubes).")
             else:
-                # Torneos UEFA: asociar tiros y faltas de ESPN sin sobreescribir minutos/titularidades de FBref
+                # Torneos UEFA: asociar tiros y faltas de ESPN e incrementar participación de nuevos partidos
                 existentes_uefa: dict = {}
-                for rid, jug_db, eq_db in cursor.execute(
-                    "SELECT rowid, Jugador, Equipo FROM estadisticas_jugadores WHERE competicion = ?",
+                estado_previo_uefa: dict = {}
+                for (
+                    rid, jug_db, eq_db, min_db, pj_db, tit_db,
+                    gol_db, ast_db, crd_y_db, crd_r_db
+                ) in cursor.execute(
+                    "SELECT rowid, Jugador, Equipo, minutos, partidos_jugados, titularidades, "
+                    "goles, asistencias, tarjetas_amarillas, tarjetas_rojas "
+                    "FROM estadisticas_jugadores WHERE competicion = ?",
                     (comp_nombre,),
                 ):
                     existentes_uefa.setdefault(normalizar_nombre(eq_db), {})[rid] = normalizar_nombre(jug_db)
+                    estado_previo_uefa[rid] = (
+                        float(min_db or 0.0), int(pj_db or 0), int(tit_db or 0),
+                        float(gol_db or 0.0), float(ast_db or 0.0),
+                        float(crd_y_db or 0.0), float(crd_r_db or 0.0),
+                    )
 
                 usados_uefa: set = set()
                 updates_uefa = []
                 inserts_uefa = []
                 for t in unicas.values():
                     nom_j, eq_j, pos_j, min_j, pj_j, tit_j, gol_j, ast_j = t[:8]
-                    tiros_t, tiros_p, fls_c, fls_r, crd_y, crd_r, offs_j = t[8:15]
+                    tiros_totales, tiros_a_puerta, faltas_cometidas, fls_r, crd_y, crd_r, offs_j = t[8:15]
                     cands = {
                         k: v for k, v in existentes_uefa.get(normalizar_nombre(eq_j), {}).items()
                         if k not in usados_uefa
@@ -1402,11 +1469,50 @@ def sincronizar_estadisticas_jugadores(conn: sqlite3.Connection) -> int:
                     rid_m = _buscar_coincidencia(normalizar_nombre(nom_j), cands)
                     if rid_m is not None:
                         usados_uefa.add(rid_m)
+                        min_db, pj_db, tit_db, gol_db, ast_db, crd_y_db, crd_r_db = estado_previo_uefa[rid_m]
+                        minutos = float(min_db)
+                        partidos_jugados = int(pj_db)
+                        titularidades = int(tit_db)
+
+                        if partidos_jugados <= 0 or minutos <= 0.0:
+                            partidos_jugados = 0
+                            titularidades = 0
+                            minutos = 0.0
+                            for idx_m in range(int(pj_j)):
+                                en_once = idx_m < int(tit_j)
+                                minutos_partido = 80.0 if en_once else 25.0
+                                if minutos_partido > 0:
+                                    partidos_jugados = partidos_jugados + 1
+                                if en_once:
+                                    titularidades = titularidades + 1
+                                minutos = minutos + minutos_partido
+                        elif int(pj_j) > partidos_jugados:
+                            delta_pj = int(pj_j) - partidos_jugados
+                            delta_tit = max(int(tit_j) - titularidades, 0)
+                            for idx_m in range(delta_pj):
+                                en_once = idx_m < delta_tit
+                                minutos_partido = 80.0 if en_once else 25.0
+                                if minutos_partido > 0:
+                                    partidos_jugados = partidos_jugados + 1
+                                if en_once:
+                                    titularidades = titularidades + 1
+                                minutos = minutos + minutos_partido
+
+                        gol_f = max(gol_db, float(gol_j))
+                        ast_f = max(ast_db, float(ast_j))
+                        crd_y_f = max(crd_y_db, float(crd_y))
+                        crd_r_f = max(crd_r_db, float(crd_r))
+                        tiros_p90 = round((tiros_totales * 90.0) / max(minutos, 1.0), 2)
+                        sot_p90 = round((tiros_a_puerta * 90.0) / max(minutos, 1.0), 2)
+                        faltas_p90 = round((faltas_cometidas * 90.0) / max(minutos, 1.0), 2)
+
                         updates_uefa.append((
-                            tiros_t, tiros_p, fls_c, fls_r, offs_j,
-                            pos_j, min_j, pj_j, tit_j, rid_m,
+                            tiros_totales, tiros_a_puerta, faltas_cometidas, fls_r, offs_j,
+                            pos_j, minutos, partidos_jugados, titularidades,
+                            gol_f, ast_f, crd_y_f, crd_r_f,
+                            tiros_p90, sot_p90, faltas_p90, rid_m,
                         ))
-                    elif pj_j > 0 or tiros_t > 0 or fls_c > 0 or gol_j > 0 or ast_j > 0:
+                    elif pj_j > 0 or tiros_totales > 0 or faltas_cometidas > 0 or gol_j > 0 or ast_j > 0:
                         inserts_uefa.append(t)
 
                 if updates_uefa:
@@ -1544,14 +1650,16 @@ def _fusionar_csv_fbref(conn: sqlite3.Connection, ruta_csv, liga: str = "", conf
     sql_upd = (
         "UPDATE estadisticas_jugadores SET minutos=?, partidos_jugados=?, titularidades=?, "
         "goles=?, asistencias=?, xg=?, tarjetas_amarillas=?, tarjetas_rojas=?, "
+        "tiros_p90=?, sot_p90=?, faltas_p90=?, "
         "posicion=CASE WHEN posicion IS NULL OR posicion IN ('', 'S/P') THEN ? ELSE posicion END "
         "WHERE rowid=?"
     )
     sql_ins = """
     INSERT INTO estadisticas_jugadores
         (Jugador, Equipo, posicion, minutos, partidos_jugados, titularidades,
-         goles, asistencias, xg, tarjetas_amarillas, tarjetas_rojas, competicion)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         goles, asistencias, xg, tarjetas_amarillas, tarjetas_rojas,
+         tiros_p90, sot_p90, faltas_p90, competicion)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.0, 0.0, 0.0, ?)
     ON CONFLICT(Jugador, Equipo, competicion) DO UPDATE SET
         minutos=excluded.minutos, partidos_jugados=excluded.partidos_jugados,
         titularidades=excluded.titularidades, goles=excluded.goles,
@@ -1565,12 +1673,25 @@ def _fusionar_csv_fbref(conn: sqlite3.Connection, ruta_csv, liga: str = "", conf
         cur = conn.cursor()
         # Candidatos por equipo normalizado: {equipo_norm: {rowid: nombre_norm}}
         por_equipo: dict = {}
+        estado_db: dict = {}
         # Misma competición: candidatos de UPDATE. Nombres globales: solo para canonizar en UEFA.
         globales: dict = {}
-        for rid, jug, eq, comp in cur.execute(
-                "SELECT rowid, Jugador, Equipo, competicion FROM estadisticas_jugadores"):
+        for (
+            rid, jug, eq, comp, min_db, pj_db, tit_db,
+            gol_db, ast_db, crd_y_db, crd_r_db, tiros_t_db, tiros_p_db, faltas_c_db
+        ) in cur.execute(
+            "SELECT rowid, Jugador, Equipo, competicion, minutos, partidos_jugados, titularidades, "
+            "goles, asistencias, tarjetas_amarillas, tarjetas_rojas, "
+            "tiros_totales, tiros_a_puerta, faltas_cometidas FROM estadisticas_jugadores"
+        ):
             if comp == competicion:
                 por_equipo.setdefault(normalizar_nombre(eq), {})[rid] = normalizar_nombre(jug)
+                estado_db[rid] = (
+                    float(min_db or 0.0), int(pj_db or 0), int(tit_db or 0),
+                    float(gol_db or 0.0), float(ast_db or 0.0),
+                    float(crd_y_db or 0.0), float(crd_r_db or 0.0),
+                    float(tiros_t_db or 0.0), float(tiros_p_db or 0.0), float(faltas_c_db or 0.0),
+                )
             globales.setdefault(normalizar_nombre(eq), {}).setdefault(normalizar_nombre(jug), jug)
 
         registros = [
@@ -1596,6 +1717,42 @@ def _fusionar_csv_fbref(conn: sqlite3.Connection, ruta_csv, liga: str = "", conf
         usados: set = set()
         actualizaciones, inserciones = [], []
 
+        def _construir_update_fbref(reg_item: dict, target_rid: int) -> tuple:
+            v_min, v_mp, v_st, v_gls, v_ast, v_xg, v_y, v_r = reg_item["vals"]
+            (
+                _, pj_db, tit_db, gol_db, ast_db, crd_y_db, crd_r_db,
+                tiros_totales, tiros_a_puerta, faltas_cometidas
+            ) = estado_db.get(target_rid, (0.0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+
+            minutos = float(v_min)
+            partidos_jugados = int(v_mp)
+            titularidades = int(v_st)
+
+            if pj_db > partidos_jugados:
+                delta_pj = pj_db - partidos_jugados
+                delta_tit = max(tit_db - titularidades, 0)
+                for idx_m in range(delta_pj):
+                    en_once = idx_m < delta_tit
+                    minutos_partido = 80.0 if en_once else 25.0
+                    if minutos_partido > 0:
+                        partidos_jugados = partidos_jugados + 1
+                    if en_once:
+                        titularidades = titularidades + 1
+                    minutos = minutos + minutos_partido
+
+            gol_f = max(float(v_gls), gol_db)
+            ast_f = max(float(v_ast), ast_db)
+            y_f = max(float(v_y), crd_y_db)
+            r_f = max(float(v_r), crd_r_db)
+            tiros_p90 = round((tiros_totales * 90.0) / max(minutos, 1.0), 2)
+            sot_p90 = round((tiros_a_puerta * 90.0) / max(minutos, 1.0), 2)
+            faltas_p90 = round((faltas_cometidas * 90.0) / max(minutos, 1.0), 2)
+            return (
+                minutos, partidos_jugados, titularidades,
+                gol_f, ast_f, float(v_xg), y_f, r_f,
+                tiros_p90, sot_p90, faltas_p90, reg_item["pos"], target_rid,
+            )
+
         # Pasada 1: coincidencias exactas; pasada 2: difusas sobre los restantes.
         pendientes = []
         for reg in registros:
@@ -1603,7 +1760,7 @@ def _fusionar_csv_fbref(conn: sqlite3.Connection, ruta_csv, liga: str = "", conf
             exactos = [k for k, v in cands.items() if v == reg["norm"]]
             if len(exactos) == 1:
                 usados.add(exactos[0])
-                actualizaciones.append((*reg["vals"], reg["pos"], exactos[0]))
+                actualizaciones.append(_construir_update_fbref(reg, exactos[0]))
             else:
                 pendientes.append(reg)
         for reg in pendientes:
@@ -1611,7 +1768,7 @@ def _fusionar_csv_fbref(conn: sqlite3.Connection, ruta_csv, liga: str = "", conf
             rid = _buscar_coincidencia(reg["norm"], cands)
             if rid is not None:
                 usados.add(rid)
-                actualizaciones.append((*reg["vals"], reg["pos"], rid))
+                actualizaciones.append(_construir_update_fbref(reg, rid))
             else:
                 inserciones.append((reg["jugador"], reg["equipo"], reg["pos"], *reg["vals"], competicion))
 

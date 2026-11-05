@@ -1458,33 +1458,6 @@ def calcular_pesos_time_decay(df_sub, xi=0.010, fecha_ref=None):
     return pesos
 
 
-def calcular_media_ponderada_poisson(df_sub, col_goles, xi=0.010, default=1.25, fecha_ref=None):
-    """
-    Calcula la media de goles ponderada temporalmente con np.average(..., weights=w).
-    Si xi <= 0, devuelve la media aritmética simple (.mean()).
-    """
-    if df_sub is None or df_sub.empty or col_goles not in df_sub.columns:
-        return default
-
-    df_val = df_sub[df_sub[col_goles].notna()].copy()
-    if df_val.empty:
-        return default
-
-    valores = pd.to_numeric(df_val[col_goles], errors="coerce").dropna()
-    if valores.empty:
-        return default
-
-    if xi <= 0 or "Date" not in df_val.columns:
-        return float(valores.mean())
-
-    df_val = df_val.loc[valores.index]
-    w = calcular_pesos_time_decay(df_val, xi=xi, fecha_ref=fecha_ref)
-    if len(w) != len(valores) or np.sum(w) <= 0:
-        return float(valores.mean())
-
-    return float(np.average(valores.to_numpy(dtype=float), weights=w))
-
-
 _FUENTES_PDF = None
 COLOR_NAVY = colors.HexColor("#0D1B2A")
 COLOR_SLATE_HEADER = colors.HexColor("#1E293B")
@@ -2163,13 +2136,9 @@ OPCIONES_MENU_GLOBAL = [
     "🎯 Radar de Tendencias",
     "📈 Tendencias Individuales",
     "📋 Scouting de Jugadores",
-    "🤖 Motor de Apuestas (EV+)",
     "⚖️ Directorio y Matchup Árbitros",
     "🧮 Hándicap Asiático Avanzado",
     "🎯 Escáner Autónomo de Ineficiencias (+EV Scanner)",
-    "🔗 Constructor Combinadas (EV+)",
-    "💸 Calculadora & Kelly",
-    "🤖 Asistente IA Local",
 ]
 
 MAPA_BREADCRUMB_MODULOS = {
@@ -2181,13 +2150,9 @@ MAPA_BREADCRUMB_MODULOS = {
     "🎯 Radar de Tendencias": "Radar de Tendencias",
     "📈 Tendencias Individuales": "Radar de Tendencias Individuales",
     "📋 Scouting de Jugadores": "Scouting de Jugadores Pro",
-    "🤖 Motor de Apuestas (EV+)": "Motor de Apuestas (EV+)",
     "⚖️ Directorio y Matchup Árbitros": "Matchup de Árbitros & Tarjetas",
     "🧮 Hándicap Asiático Avanzado": "Hándicap Asiático Avanzado",
     "🎯 Escáner Autónomo de Ineficiencias (+EV Scanner)": "Escáner Autónomo (+EV Scanner)",
-    "🔗 Constructor Combinadas (EV+)": "Constructor Combinadas (EV+)",
-    "💸 Calculadora & Kelly": "Calculadora & Kelly",
-    "🤖 Asistente IA Local": "Asistente IA Local",
 }
 
 
@@ -3732,51 +3697,28 @@ _IND_FILTRO_COMPETICION = {
 }
 _IND_COLS_VISTA = ["Date", "HomeTeam", "AwayTeam", "Div", "FTHG", "FTAG", "FTR",
                    "HS", "AS", "HST", "AST", "HC", "AC", "HY", "AY", "HR", "AR"]
-_IND_SPORT_KEYS = {
-    "SP1": "soccer_spain_la_liga", "E0": "soccer_epl", "D1": "soccer_germany_bundesliga",
-    "I1": "soccer_italy_serie_a", "F1": "soccer_france_ligue_one",
-}
-_IND_HORIZONTE_DIAS = 14
 
-_IND_CAT_TODAS = "⚡ Todas"
-_IND_CAT_CORNERS = "🚩 Córners"
-_IND_CAT_TIROS = "🎯 Tiros a Puerta"
-_IND_CAT_TARJETAS = "🟨 Tarjetas"
-_IND_CAT_GOLES = "⚽ Goles"
-
-# Matriz de cuotas base Kambi/Paf: {metrica: (categoria, nombre_over, nombre_under, {linea: cuota}, {linea: cuota})}
-# Las líneas marcadas (*) no figuraban en la matriz institucional: son valores de referencia estimados.
-_IND_MATRIZ_CUOTAS = {
-    "corn_for": (_IND_CAT_CORNERS, "Córners a favor Más de", None,
-                 {2.5: 1.15, 3.5: 1.35, 4.5: 1.68, 5.5: 2.15, 6.5: 2.90, 7.5: 3.85}, {}),
-    "corn_against": (_IND_CAT_CORNERS, None, "Córners concedidos Menos de",
-                     {}, {2.5: 3.20, 3.5: 2.10, 4.5: 1.55, 5.5: 1.25}),  # (*) <2.5
-    "sot": (_IND_CAT_TIROS, "Tiros a puerta Más de", "Tiros a puerta Menos de",
-            {2.5: 1.18, 3.5: 1.42, 4.5: 1.85, 5.5: 2.45, 6.5: 3.25}, {2.5: 4.50, 3.5: 3.00, 4.5: 2.05}),  # (*) unders
-    "cards": (_IND_CAT_TARJETAS, "Tarjetas recibidas Más de", "Tarjetas recibidas Menos de",
-              {0.5: 1.10, 1.5: 1.50, 2.5: 2.25, 3.5: 3.40, 4.5: 5.20, 5.5: 8.50},  # (*) >0.5
-              {1.5: 2.80, 2.5: 1.85, 3.5: 1.45, 4.5: 1.25, 5.5: 1.12}),
-    "goals": (_IND_CAT_GOLES, "Goles anotados Más de", "Goles anotados Menos de",
-              {0.5: 1.18, 1.5: 1.95, 2.5: 3.40, 3.5: 6.50}, {1.5: 1.85, 2.5: 1.30}),  # (*) >3.5, unders
-}
-# Catálogo plano: (metrica, categoria, etiqueta, tipo, linea, cuota_base)
+# Catálogo: (metrica, categoria, etiqueta, tipo, linea, cuota_base Kambi/Paf estimada)
 _IND_CATALOGO_PROPS = [
-    (met, cat, f"{nom_o} {lin}", "over", lin, cuota)
-    for met, (cat, nom_o, nom_u, ov, un) in _IND_MATRIZ_CUOTAS.items()
-    for lin, cuota in ov.items()
-] + [
-    (met, cat, f"{nom_u} {lin}", "under", lin, cuota)
-    for met, (cat, nom_o, nom_u, ov, un) in _IND_MATRIZ_CUOTAS.items()
-    for lin, cuota in un.items()
+    ("corn_for", "🚩 Córners Propios", "Córners a favor Más de 3.5", "over", 3.5, 1.35),
+    ("corn_for", "🚩 Córners Propios", "Córners a favor Más de 4.5", "over", 4.5, 1.70),
+    ("corn_for", "🚩 Córners Propios", "Córners a favor Más de 5.5", "over", 5.5, 2.20),
+    ("corn_for", "🚩 Córners Propios", "Córners a favor Más de 6.5", "over", 6.5, 3.00),
+    ("corn_for", "🚩 Córners Propios", "Córners a favor Más de 7.5", "over", 7.5, 4.20),
+    ("corn_against", "🚩 Córners Propios", "Córners concedidos Menos de 3.5", "under", 3.5, 3.00),
+    ("corn_against", "🚩 Córners Propios", "Córners concedidos Menos de 4.5", "under", 4.5, 2.05),
+    ("sot", "🎯 Tiros a Puerta", "Tiros a puerta Más de 3.5", "over", 3.5, 1.55),
+    ("sot", "🎯 Tiros a Puerta", "Tiros a puerta Más de 4.5", "over", 4.5, 2.05),
+    ("sot", "🎯 Tiros a Puerta", "Tiros a puerta Más de 5.5", "over", 5.5, 2.90),
+    ("sot", "🎯 Tiros a Puerta", "Tiros a puerta Más de 6.5", "over", 6.5, 4.20),
+    ("goals", "⚽ Goles Propios", "Goles anotados Más de 0.5", "over", 0.5, 1.25),
+    ("goals", "⚽ Goles Propios", "Goles anotados Más de 1.5", "over", 1.5, 2.10),
+    ("goals", "⚽ Goles Propios", "Goles anotados Más de 2.5", "over", 2.5, 4.20),
+    ("cards", "🟨 Tarjetas Propias", "Tarjetas recibidas Más de 1.5", "over", 1.5, 1.50),
+    ("cards", "🟨 Tarjetas Propias", "Tarjetas recibidas Más de 2.5", "over", 2.5, 2.40),
+    ("cards", "🟨 Tarjetas Propias", "Tarjetas recibidas Menos de 1.5", "under", 1.5, 2.50),
+    ("cards", "🟨 Tarjetas Propias", "Tarjetas recibidas Menos de 2.5", "under", 2.5, 1.55),
 ]
-
-# Opciones de píldoras de línea por categoría
-_IND_LINEAS_PILLS = {
-    _IND_CAT_TARJETAS: ["Todas", "+0.5", "+1.5", "+2.5", "+3.5", "+4.5", "+5.5", "-1.5", "-2.5", "-3.5", "-4.5", "-5.5"],
-    _IND_CAT_CORNERS: ["Todas", "+2.5", "+3.5", "+4.5", "+5.5", "+6.5", "+7.5", "-2.5", "-3.5", "-4.5", "-5.5"],
-    _IND_CAT_TIROS: ["Todas", "+2.5", "+3.5", "+4.5", "+5.5", "+6.5", "-2.5", "-3.5", "-4.5"],
-    _IND_CAT_GOLES: ["Todas", "+0.5", "+1.5", "+2.5", "+3.5", "-1.5", "-2.5"],
-}
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -3800,6 +3742,7 @@ def _cargar_dataset_props_vectorial(db_path="macro_base_futbol.db"):
                 conn.execute(f"CREATE VIEW partidos_historico AS SELECT {sel} FROM historico_reciente")
                 conn.commit()
             query = f"""
+                SELECT {", ".join(_IND_COLS_VISTA)}
                 SELECT {", ".join(f"[{c}]" for c in _IND_COLS_VISTA)}
                 FROM partidos_historico
                 WHERE Date IS NOT NULL AND HomeTeam IS NOT NULL AND AwayTeam IS NOT NULL
@@ -3816,28 +3759,6 @@ def _cargar_dataset_props_vectorial(db_path="macro_base_futbol.db"):
             df[c] = pd.to_numeric(df[c], errors="coerce")
     df["Jugado"] = df["FTHG"].notna() & df["FTAG"].notna()
     return df.sort_values("Date", ascending=False, kind="stable").reset_index(drop=True)
-
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def _ind_fixtures_vivo(sport_key):
-    """Próximos partidos en vivo (misma fuente que el Radar Colectivo: conector_odds)."""
-    if not sport_key:
-        return []
-    try:
-        import conector_odds as _co_ind
-        if hasattr(_co_ind, "_pedir_cuotas"):
-            res = _co_ind._pedir_cuotas(sport_key, "h2h")
-            if getattr(res, "status_code", 500) == 200:
-                datos = res.json()
-                if isinstance(datos, list):
-                    return [
-                        {"home_team": e.get("home_team"), "away_team": e.get("away_team"),
-                         "commence_time": e.get("commence_time")}
-                        for e in datos if isinstance(e, dict)
-                    ]
-    except Exception:
-        return []
-    return []
 
 
 def _ind_aplanar_partidos(df):
@@ -3861,10 +3782,10 @@ def _ind_aplanar_partidos(df):
         corn_f = jug[f"{sp}C"].values.astype(float)
         corn_a = jug[f"{sr}C"].values.astype(float)
         sot = jug[f"{sp}ST"].values.astype(float)
-        sot_r = jug[f"{sr}ST"].values.astype(float)
-        # Sin dato (ESPN/UEFA): NaN o ambos lados a 0 -> NaN para excluir del muestreo
+        # Sin dato (ESPN/UEFA): ambos lados a 0 o NaN -> NaN para excluir del muestreo
         sin_corn = np.isnan(corn_f) | np.isnan(corn_a) | ((corn_f + corn_a) == 0)
-        sin_sot = np.isnan(sot) | np.isnan(sot_r) | ((sot + sot_r) == 0)
+        sin_sot = np.isnan(sot) | np.isnan(jug[f"{sr}ST"].values.astype(float)) | \
+            ((sot + jug[f"{sr}ST"].values.astype(float)) == 0)
         out["corn_for"] = np.where(sin_corn, np.nan, corn_f)
         out["corn_against"] = np.where(sin_corn, np.nan, corn_a)
         out["sot"] = np.where(sin_sot, np.nan, sot)
@@ -3876,60 +3797,23 @@ def _ind_aplanar_partidos(df):
         return out
 
     largo = pd.concat([_lado(True), _lado(False)], ignore_index=True)
+    largo["rival3"] = largo["Rival"].astype(str).str.upper().str[:3]
     largo["rival3"] = largo["Rival"].astype(str).str.upper().str[:3].str.strip()
     return largo.sort_values("Fecha", ascending=False, kind="stable").reset_index(drop=True)
 
 
 def _ind_proximos_cruces(df):
-    """Próximo partido por equipo en los próximos 14 días.
-
-    Replica las fuentes del Radar Colectivo: (1) fixtures en vivo vía conector_odds
-    (con hora) y (2) partidos programados sin disputar en la BD (fecha >= hoy).
-    """
-    cols = ["Equipo", "px_rival", "px_cond", "px_dt"]
+    """Próximo partido por equipo (fechas futuras sin resultado), vectorizado."""
     hoy = pd.Timestamp.now().normalize()
-    limite = hoy + pd.Timedelta(days=_IND_HORIZONTE_DIAS + 1)
-    partes = []
-
-    fut = df[(~df["Jugado"]) & (df["Date"] >= hoy) & (df["Date"] < limite)]
-    if not fut.empty:
-        partes.append(pd.DataFrame({"Equipo": fut["HomeTeam"].values, "px_rival": fut["AwayTeam"].values,
-                                    "px_cond": "Local", "px_dt": fut["Date"].values, "src": 1}))
-        partes.append(pd.DataFrame({"Equipo": fut["AwayTeam"].values, "px_rival": fut["HomeTeam"].values,
-                                    "px_cond": "Visitante", "px_dt": fut["Date"].values, "src": 1}))
-
-    equipos_bd = sorted(pd.concat([df["HomeTeam"], df["AwayTeam"]]).dropna().astype(str).unique().tolist())
-    eventos = []
-    for sk in _IND_SPORT_KEYS.values():
-        eventos.extend(_ind_fixtures_vivo(sk) or [])
-    if eventos:
-        ev = pd.DataFrame(eventos).dropna(subset=["home_team", "away_team", "commence_time"])
-        if not ev.empty:
-            nombres = pd.unique(pd.concat([ev["home_team"], ev["away_team"]]))
-            mapa = {n: ev_resolver_equipo(n, equipos_bd) for n in nombres}
-            ev["h"] = ev["home_team"].map(mapa)
-            ev["a"] = ev["away_team"].map(mapa)
-            ev = ev.dropna(subset=["h", "a"])
-            ts = pd.to_datetime(ev["commence_time"], errors="coerce", utc=True)
-            try:
-                ts = ts.dt.tz_convert("Europe/Madrid")
-            except Exception:
-                pass
-            ev["dt"] = ts.dt.tz_localize(None)
-            ev = ev[(ev["dt"] >= hoy) & (ev["dt"] < limite)]
-            if not ev.empty:
-                partes.append(pd.DataFrame({"Equipo": ev["h"].values, "px_rival": ev["a"].values,
-                                            "px_cond": "Local", "px_dt": ev["dt"].values, "src": 0}))
-                partes.append(pd.DataFrame({"Equipo": ev["a"].values, "px_rival": ev["h"].values,
-                                            "px_cond": "Visitante", "px_dt": ev["dt"].values, "src": 0}))
-    if not partes:
-        return pd.DataFrame(columns=cols)
-    todo = pd.concat(partes, ignore_index=True)
-    todo["px_dt"] = pd.to_datetime(todo["px_dt"])
-    todo["_dia"] = todo["px_dt"].dt.normalize()
-    # Primero el día más cercano; a igualdad de día, la fuente en vivo (trae hora)
-    todo = todo.sort_values(["_dia", "src", "px_dt"], kind="stable")
-    return todo.drop_duplicates("Equipo", keep="first")[cols].reset_index(drop=True)
+    fut = df[(~df["Jugado"]) & (df["Date"] >= hoy)]
+    if fut.empty:
+        return pd.DataFrame(columns=["Equipo", "px_rival", "px_cond", "px_fecha"])
+    loc = pd.DataFrame({"Equipo": fut["HomeTeam"].values, "px_rival": fut["AwayTeam"].values,
+                        "px_cond": "Local", "px_fecha": fut["Date"].values})
+    vis = pd.DataFrame({"Equipo": fut["AwayTeam"].values, "px_rival": fut["HomeTeam"].values,
+                        "px_cond": "Visitante", "px_fecha": fut["Date"].values})
+    todo = pd.concat([loc, vis], ignore_index=True).sort_values("px_fecha", kind="stable")
+    return todo.drop_duplicates("Equipo", keep="first").reset_index(drop=True)
 
 
 def _ind_poisson_p_over(lam, k):
@@ -3941,33 +3825,26 @@ def _ind_poisson_p_over(lam, k):
     return np.clip(1.0 - acum, 0.02, 0.98)
 
 
-def _escanear_props_vectorial(df, ventana=5, min_winrate=75.0, categoria=_IND_CAT_TODAS,
-                              condicion="Global", divs=None, direccion="Todos", linea=None,
-                              equipo=None):
-    """Escáner de props individuales: Poisson real + EV% sobre ventana configurable.
-
-    `direccion`: 'Todos' | 'over' | 'under'. `linea`: None o (tipo, valor) p. ej. ('over', 4.5).
-    """
+def _escanear_props_vectorial(df, ventana=5, min_winrate=75.0, categoria="Todas las Métricas",
+                              condicion="Global", divs=None):
+    """Escáner de props individuales: Poisson real + EV% sobre ventana configurable."""
     columnas = ["Equipo", "Liga", "Categoria", "Mercado", "Linea", "Tipo", "Hits", "N", "Winrate",
                 "Lambda", "Prob", "CuotaJusta", "CuotaBase", "EV", "Chips",
-                "px_rival", "px_cond", "px_dt"]
-    vacio = pd.DataFrame(columns=columnas)
+                "px_rival", "px_cond", "px_fecha"]
     if df is None or df.empty:
-        return vacio
+        return pd.DataFrame(columns=columnas)
 
     largo = _ind_aplanar_partidos(df)
     if largo.empty:
-        return vacio
+        return pd.DataFrame(columns=columnas)
     if divs:
         largo = largo[largo["Div"].isin(divs)]
     if condicion == "Local":
         largo = largo[largo["Cond"] == "L"]
     elif condicion == "Visitante":
         largo = largo[largo["Cond"] == "V"]
-    if equipo and equipo != "Todos los Equipos":
-        largo = largo[largo["Equipo"] == equipo]
     if largo.empty:
-        return vacio
+        return pd.DataFrame(columns=columnas)
 
     # Liga de referencia por equipo: preferencia doméstica sobre UEFA
     pri = largo.assign(_u=largo["Div"].isin(_IND_UEFA_DIVS).astype(int)).sort_values(
@@ -3976,7 +3853,8 @@ def _escanear_props_vectorial(df, ventana=5, min_winrate=75.0, categoria=_IND_CA
         lambda d: _IND_NOMBRE_DIV.get(d, d))
 
     partes = []
-    for met in sorted({m[0] for m in _IND_CATALOGO_PROPS}):
+    metricas = sorted({m[0] for m in _IND_CATALOGO_PROPS})
+    for met in metricas:
         sub = largo.dropna(subset=[met])
         if sub.empty:
             continue
@@ -3988,16 +3866,12 @@ def _escanear_props_vectorial(df, ventana=5, min_winrate=75.0, categoria=_IND_CA
         w = w.iloc[::-1]  # cronológico: antiguo -> reciente
         agg = w.groupby("Equipo", sort=False).agg(
             Lambda=(met, "mean"), vals=(met, list), chips=("chip", list))
-        for (m_met, cat, etiqueta, tipo, lin, cuota_base) in _IND_CATALOGO_PROPS:
+        for (m_met, cat, etiqueta, tipo, linea, cuota_base) in _IND_CATALOGO_PROPS:
             if m_met != met:
                 continue
-            if categoria != _IND_CAT_TODAS and cat != categoria:
+            if categoria not in ("Todas las Métricas", "Todas") and cat != categoria:
                 continue
-            if direccion in ("over", "under") and tipo != direccion:
-                continue
-            if linea is not None and (tipo, lin) != tuple(linea):
-                continue
-            k = int(math.floor(lin)) + 1
+            k = int(math.floor(linea)) + 1
             lam = agg["Lambda"].values
             p_over = _ind_poisson_p_over(lam, k)
             prob = p_over if tipo == "over" else np.clip(1.0 - p_over, 0.02, 0.98)
@@ -4006,7 +3880,7 @@ def _escanear_props_vectorial(df, ventana=5, min_winrate=75.0, categoria=_IND_CA
             ], dtype=int)
             wr = hits / float(ventana) * 100.0
             parte = pd.DataFrame({
-                "Equipo": agg.index, "Categoria": cat, "Mercado": etiqueta, "Linea": lin,
+                "Equipo": agg.index, "Categoria": cat, "Mercado": etiqueta, "Linea": linea,
                 "Tipo": tipo, "Hits": hits, "N": int(ventana), "Winrate": wr,
                 "Lambda": lam, "Prob": prob,
                 "CuotaJusta": np.round(1.0 / prob, 2), "CuotaBase": cuota_base,
@@ -4019,10 +3893,10 @@ def _escanear_props_vectorial(df, ventana=5, min_winrate=75.0, categoria=_IND_CA
             partes.append(parte[parte["Winrate"] >= float(min_winrate)])
 
     if not partes:
-        return vacio
+        return pd.DataFrame(columns=columnas)
     res = pd.concat(partes, ignore_index=True)
     if res.empty:
-        return vacio
+        return pd.DataFrame(columns=columnas)
     res["Liga"] = res["Equipo"].map(liga_eq).fillna("N/A")
     res = res.merge(_ind_proximos_cruces(df), on="Equipo", how="left")
     return res.sort_values(["EV", "Winrate"], ascending=False, kind="stable").reset_index(drop=True)
@@ -4047,7 +3921,7 @@ def _ind_cruce_txt(rival, cond, fecha):
         return "Sin cruce inmediato"
     f = pd.Timestamp(fecha)
     hora = f" {f.strftime('%H:%M')}" if (f.hour or f.minute) else ""
-    return f"🗓️ vs {_html_ind.escape(str(rival))} [{cond}] · {f.strftime('%d/%m')}{hora}"
+    return f"🗓️ vs {_html_ind.escape(str(rival))} ({cond}) · {f.strftime('%d/%m')}{hora}"
 
 
 def render_radar_tendencias_individuales():
@@ -4061,13 +3935,12 @@ def render_radar_tendencias_individuales():
         ".ind-badge{display:inline-block;margin-right:8px;padding:4px 12px;border-radius:20px;"
         "font-size:0.78rem;font-weight:600;background:rgba(56,139,253,0.15);border:1px solid #388bfd;color:#58a6ff;}"
         ".ind-badge.g{background:rgba(63,185,80,0.12);border-color:#238636;color:#3fb950;}"
-        ".ind-badge.off{background:#161b22;border-color:#30363d;color:#8b949e;opacity:0.85;}"
         ".ind-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-bottom:22px;}"
-        ".ind-card{background:#0d1117;border:1px solid #30363d;border-top:3px solid #3fb950;"
-        "border-radius:12px;padding:14px 16px;box-shadow:0 8px 22px rgba(0,0,0,0.35);}"
+        ".ind-card{background:rgba(13,17,23,0.85);border:1px solid rgba(255,255,255,0.1);"
+        "border-radius:12px;padding:14px 16px;backdrop-filter:blur(10px);}"
         ".ind-card .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}"
         ".ind-tag{font-size:0.72rem;font-weight:700;padding:3px 9px;border-radius:12px;"
-        "background:rgba(88,166,255,0.14);border:1px solid #1f6feb;color:#58a6ff;white-space:nowrap;}"
+        "background:rgba(88,166,255,0.14);border:1px solid #1f6feb;color:#58a6ff;}"
         ".ind-ev{font-size:0.78rem;font-weight:800;padding:3px 10px;border-radius:12px;"
         "background:rgba(63,185,80,0.16);border:1px solid #3fb950;color:#3fb950;}"
         ".ind-card h3{margin:2px 0 2px 0;color:#f0f6fc;font-size:1.12rem;}"
@@ -4098,65 +3971,33 @@ def render_radar_tendencias_individuales():
         unsafe_allow_html=True,
     )
 
+    c1, c2, c3, c4 = st.columns([1.2, 1.2, 1.2, 1.4])
+    with c1:
+        comp_sel = st.selectbox("Competición", list(_IND_FILTRO_COMPETICION.keys()), key="ind_radar_comp")
+    with c2:
+        cond_lbl = st.radio("Condición de Campo", ["🌐 Global", "🏠 Local", "✈️ Visitante"],
+                            horizontal=True, key="ind_radar_cond")
+    with c3:
+        cat_sel = st.selectbox(
+            "Categoría de Prop",
+            ["Todas las Métricas", "🚩 Córners Propios", "🎯 Tiros a Puerta", "⚽ Goles Propios", "🟨 Tarjetas Propias"],
+            key="ind_radar_cat",
+        )
+    with c4:
+        umbral_sel = st.slider("Racha mínima (%)", 50, 100, 75, step=5, key="ind_radar_umbral")
+        ventana_sel = st.selectbox("Muestra", [3, 5, 8, 10, 15], index=1,
+                                   format_func=lambda x: f"Últimos {x} partidos", key="ind_radar_ventana")
+
+    condicion = {"🌐 Global": "Global", "🏠 Local": "Local", "✈️ Visitante": "Visitante"}[cond_lbl]
+
     df_raw = _cargar_dataset_props_vectorial()
     if df_raw.empty:
         st.warning("No se hallaron registros históricos para procesar tendencias individuales.")
         return
 
-    # ── Fila 1: contexto ─────────────────────────────────────────────────────
-    r1c1, r1c2, r1c3 = st.columns([1.2, 1.4, 1.2])
-    with r1c1:
-        comp_sel = st.selectbox("Competición", list(_IND_FILTRO_COMPETICION.keys()), key="ind_radar_comp")
-    divs_sel = _IND_FILTRO_COMPETICION[comp_sel]
-    with r1c2:
-        cond_lbl = st.segmented_control(
-            "Condición de Campo", ["🌐 Global", "🏠 Solo Local", "✈️ Solo Visitante"],
-            default="🌐 Global", key="ind_radar_cond",
-        ) or "🌐 Global"
-    with r1c3:
-        df_div = df_raw if not divs_sel else df_raw[df_raw["Div"].isin(divs_sel)]
-        equipos_lista = sorted(pd.unique(pd.concat([df_div["HomeTeam"], df_div["AwayTeam"]]).dropna().astype(str)).tolist())
-        equipo_sel = st.selectbox("Buscar Equipo", ["Todos los Equipos"] + equipos_lista, key="ind_radar_equipo")
-
-    # ── Fila 2: categoría y líneas por píldoras ──────────────────────────────
-    cat_sel = st.segmented_control(
-        "Categoría de Prop",
-        [_IND_CAT_TODAS, _IND_CAT_CORNERS, _IND_CAT_TIROS, _IND_CAT_TARJETAS, _IND_CAT_GOLES],
-        default=_IND_CAT_TODAS, key="ind_radar_cat",
-    ) or _IND_CAT_TODAS
-    cat_slug = {_IND_CAT_CORNERS: "corn", _IND_CAT_TIROS: "sot", _IND_CAT_TARJETAS: "card", _IND_CAT_GOLES: "gol"}.get(cat_sel, "all")
-
-    direccion = "Todos"
-    linea_sel = None
-    if cat_sel == _IND_CAT_TODAS:
-        st.markdown("<span class='ind-badge off'>🔒 Auditoría Multimercado Activa</span>", unsafe_allow_html=True)
-    else:
-        if cat_sel == _IND_CAT_TARJETAS:
-            dir_lbl = st.segmented_control("Dirección", ["Todos", "Overs (+)", "Unders (-)"],
-                                           default="Todos", key=f"ind_radar_dir_{cat_slug}") or "Todos"
-            direccion = {"Todos": "Todos", "Overs (+)": "over", "Unders (-)": "under"}[dir_lbl]
-        elif cat_sel == _IND_CAT_CORNERS:
-            dir_lbl = st.segmented_control("Dirección", ["Todos", "A favor (Overs)", "Concedidos (Unders)"],
-                                           default="Todos", key=f"ind_radar_dir_{cat_slug}") or "Todos"
-            direccion = {"Todos": "Todos", "A favor (Overs)": "over", "Concedidos (Unders)": "under"}[dir_lbl]
-        lin_lbl = st.pills("Línea Específica", _IND_LINEAS_PILLS[cat_sel], default="Todas",
-                           key=f"ind_radar_linea_{cat_slug}") or "Todas"
-        if lin_lbl != "Todas":
-            linea_sel = ("over" if lin_lbl.startswith("+") else "under", float(lin_lbl[1:]))
-
-    # ── Fila 3: afinación cuantitativa ───────────────────────────────────────
-    r3c1, r3c2 = st.columns([1.4, 1.6])
-    with r3c1:
-        umbral_sel = st.slider("Racha mínima (%)", 50, 100, 75, step=5, key="ind_radar_umbral")
-    with r3c2:
-        ventana_sel = st.pills("Muestra de Partidos", [3, 5, 8, 10, 15], default=5,
-                               format_func=lambda x: f"{x} partidos", key="ind_radar_ventana") or 5
-
-    condicion = {"🌐 Global": "Global", "🏠 Solo Local": "Local", "✈️ Solo Visitante": "Visitante"}[cond_lbl]
-
     res = _escanear_props_vectorial(
         df_raw, ventana=ventana_sel, min_winrate=float(umbral_sel), categoria=cat_sel,
-        condicion=condicion, divs=divs_sel, direccion=direccion, linea=linea_sel, equipo=equipo_sel,
+        condicion=condicion, divs=_IND_FILTRO_COMPETICION[comp_sel],
     )
     if res.empty:
         st.info(f"Ningún equipo cumple actualmente el {umbral_sel}% de efectividad con los parámetros fijados.")
@@ -4167,7 +4008,7 @@ def render_radar_tendencias_individuales():
     # ── TOP 4 EV+ ────────────────────────────────────────────────────────────
     tarjetas = []
     for r in reg[:4]:
-        cruce = _ind_cruce_txt(r["px_rival"], r["px_cond"], r["px_dt"])
+        cruce = _ind_cruce_txt(r["px_rival"], r["px_cond"], r["px_fecha"])
         tarjetas.append(
             "<div class='ind-card'>"
             "<div class='top'><span class='ind-tag'>👤 Prop Individual</span>"
@@ -4196,7 +4037,7 @@ def render_radar_tendencias_individuales():
             "<td><span class='ind-tag'>👤 Individual</span></td>"
             f"<td><b style='color:#f0f6fc;'>{_html_ind.escape(str(r['Equipo']))}</b>"
             f"<div class='ind-liga'>{_html_ind.escape(str(r['Liga']))}</div></td>"
-            f"<td>{_ind_cruce_txt(r['px_rival'], r['px_cond'], r['px_dt'])}</td>"
+            f"<td>{_ind_cruce_txt(r['px_rival'], r['px_cond'], r['px_fecha'])}</td>"
             f"<td style='color:#79c0ff;font-weight:600;'>{_html_ind.escape(r['Mercado'])}</td>"
             f"<td><b>{r['Hits']}/{r['N']}</b> <span style='color:#8b949e;'>[{r['Winrate']:.0f}%]</span></td>"
             f"<td>{_ind_chips_html(r['Chips'])}</td>"
@@ -4218,1352 +4059,6 @@ def render_radar_tendencias_individuales():
         f"{len(reg)} oportunidades detectadas · mostrando las {min(len(reg), 200)} de mayor EV%. "
         "Cuota Justa = 1/P(Poisson); EV% = (P × Cuota Base − 1) × 100."
     )
-
-
-# ==============================================================================
-# RADAR COLECTIVO VIP (RFC-FIX-V3): CASCADE FILTERING, POISSON REAL, CHOQUE UNIFICADO & TIERS
-# ==============================================================================
-_COL_CAT_TODOS = "⚡ Todos los Mercados"
-_COL_CAT_GOLES = "⚽ Goles Totales"
-_COL_CAT_BTTS = "🤝 Ambos Marcan (BTTS)"
-_COL_CAT_CORNERS = "🚩 Córners Totales"
-_COL_CAT_TARJETAS = "🟨 Tarjetas Totales"
-
-_COL_TIER_TODOS = "⚡ Todos los Rivales"
-_COL_TIER_TOP = "👑 Top 6 / Líderes"
-_COL_TIER_MEDIA = "⚖️ Zona Media"
-_COL_TIER_BAJA = "⚠️ Zona Baja/Descenso"
-_COL_TIER_UEFA = "🏆 Competición Europea"
-_COL_TIER_GENERAL = "⚖️ Rango General"
-
-_COL_LIGAS_DOMESTICAS = ("SP1", "E0", "I1", "D1", "F1")
-_COL_CODIGOS_UEFA = ("UCL", "UEL", "UECL", "CL", "EL", "ECL", "CHAMPIONS", "EUROPA LEAGUE", "CONFERENCE LEAGUE", "UEFA")
-
-# Diccionario estructurado de precios reales de referencia Kambi/Paf para totales colectivos
-CUOTAS_BASE_COLECTIVAS = {
-    # ⚽ Goles Totales
-    (_COL_CAT_GOLES, "+1.5"): 1.28,
-    (_COL_CAT_GOLES, "+2.5"): 1.85,
-    (_COL_CAT_GOLES, "+3.5"): 2.95,
-    (_COL_CAT_GOLES, "+4.5"): 5.10,
-    (_COL_CAT_GOLES, "-2.5"): 1.92,
-    (_COL_CAT_GOLES, "-3.5"): 1.36,
-    # 🤝 Ambos Marcan (BTTS)
-    (_COL_CAT_BTTS, "Sí (Ambos Marcan)"): 1.78,
-    (_COL_CAT_BTTS, "No (Ambos Marcan)"): 2.00,
-    # 🚩 Córners Totales
-    (_COL_CAT_CORNERS, "+7.5"): 1.30,
-    (_COL_CAT_CORNERS, "+8.5"): 1.52,
-    (_COL_CAT_CORNERS, "+9.5"): 1.85,
-    (_COL_CAT_CORNERS, "+10.5"): 2.35,
-    (_COL_CAT_CORNERS, "+11.5"): 3.10,
-    (_COL_CAT_CORNERS, "-8.5"): 2.30,
-    (_COL_CAT_CORNERS, "-9.5"): 1.85,
-    (_COL_CAT_CORNERS, "-10.5"): 1.50,
-    # 🟨 Tarjetas Totales
-    (_COL_CAT_TARJETAS, "+2.5"): 1.25,
-    (_COL_CAT_TARJETAS, "+3.5"): 1.52,
-    (_COL_CAT_TARJETAS, "+4.5"): 1.90,
-    (_COL_CAT_TARJETAS, "+5.5"): 2.55,
-    (_COL_CAT_TARJETAS, "+6.5"): 3.50,
-    (_COL_CAT_TARJETAS, "-3.5"): 2.35,
-    (_COL_CAT_TARJETAS, "-4.5"): 1.80,
-    (_COL_CAT_TARJETAS, "-5.5"): 1.40,
-}
-
-# Catálogo plano: (metrica_col, categoria, codigo_linea, etiqueta_mercado, tipo_dir, umbral, cuota_base)
-_COL_CATALOGO_MERCADOS = [
-    # Goles Totales
-    ("tot_goals", _COL_CAT_GOLES, "+1.5", "Goles Totales Más de 1.5", "over", 1.5, CUOTAS_BASE_COLECTIVAS[(_COL_CAT_GOLES, "+1.5")]),
-    ("tot_goals", _COL_CAT_GOLES, "+2.5", "Goles Totales Más de 2.5", "over", 2.5, CUOTAS_BASE_COLECTIVAS[(_COL_CAT_GOLES, "+2.5")]),
-    ("tot_goals", _COL_CAT_GOLES, "+3.5", "Goles Totales Más de 3.5", "over", 3.5, CUOTAS_BASE_COLECTIVAS[(_COL_CAT_GOLES, "+3.5")]),
-    ("tot_goals", _COL_CAT_GOLES, "+4.5", "Goles Totales Más de 4.5", "over", 4.5, CUOTAS_BASE_COLECTIVAS[(_COL_CAT_GOLES, "+4.5")]),
-    ("tot_goals", _COL_CAT_GOLES, "-2.5", "Goles Totales Menos de 2.5", "under", 2.5, CUOTAS_BASE_COLECTIVAS[(_COL_CAT_GOLES, "-2.5")]),
-    ("tot_goals", _COL_CAT_GOLES, "-3.5", "Goles Totales Menos de 3.5", "under", 3.5, CUOTAS_BASE_COLECTIVAS[(_COL_CAT_GOLES, "-3.5")]),
-    # Ambos Marcan (BTTS)
-    ("btts", _COL_CAT_BTTS, "Sí (Ambos Marcan)", "Ambos Marcan: Sí", "over", 0.5, CUOTAS_BASE_COLECTIVAS[(_COL_CAT_BTTS, "Sí (Ambos Marcan)")]),
-    ("btts", _COL_CAT_BTTS, "No (Ambos Marcan)", "Ambos Marcan: No", "under", 0.5, CUOTAS_BASE_COLECTIVAS[(_COL_CAT_BTTS, "No (Ambos Marcan)")]),
-    # Córners Totales
-    ("tot_corners", _COL_CAT_CORNERS, "+7.5", "Córners Totales Más de 7.5", "over", 7.5, CUOTAS_BASE_COLECTIVAS[(_COL_CAT_CORNERS, "+7.5")]),
-    ("tot_corners", _COL_CAT_CORNERS, "+8.5", "Córners Totales Más de 8.5", "over", 8.5, CUOTAS_BASE_COLECTIVAS[(_COL_CAT_CORNERS, "+8.5")]),
-    ("tot_corners", _COL_CAT_CORNERS, "+9.5", "Córners Totales Más de 9.5", "over", 9.5, CUOTAS_BASE_COLECTIVAS[(_COL_CAT_CORNERS, "+9.5")]),
-    ("tot_corners", _COL_CAT_CORNERS, "+10.5", "Córners Totales Más de 10.5", "over", 10.5, CUOTAS_BASE_COLECTIVAS[(_COL_CAT_CORNERS, "+10.5")]),
-    ("tot_corners", _COL_CAT_CORNERS, "+11.5", "Córners Totales Más de 11.5", "over", 11.5, CUOTAS_BASE_COLECTIVAS[(_COL_CAT_CORNERS, "+11.5")]),
-    ("tot_corners", _COL_CAT_CORNERS, "-8.5", "Córners Totales Menos de 8.5", "under", 8.5, CUOTAS_BASE_COLECTIVAS[(_COL_CAT_CORNERS, "-8.5")]),
-    ("tot_corners", _COL_CAT_CORNERS, "-9.5", "Córners Totales Menos de 9.5", "under", 9.5, CUOTAS_BASE_COLECTIVAS[(_COL_CAT_CORNERS, "-9.5")]),
-    ("tot_corners", _COL_CAT_CORNERS, "-10.5", "Córners Totales Menos de 10.5", "under", 10.5, CUOTAS_BASE_COLECTIVAS[(_COL_CAT_CORNERS, "-10.5")]),
-    # Tarjetas Totales
-    ("tot_cards", _COL_CAT_TARJETAS, "+2.5", "Tarjetas Totales Más de 2.5", "over", 2.5, CUOTAS_BASE_COLECTIVAS[(_COL_CAT_TARJETAS, "+2.5")]),
-    ("tot_cards", _COL_CAT_TARJETAS, "+3.5", "Tarjetas Totales Más de 3.5", "over", 3.5, CUOTAS_BASE_COLECTIVAS[(_COL_CAT_TARJETAS, "+3.5")]),
-    ("tot_cards", _COL_CAT_TARJETAS, "+4.5", "Tarjetas Totales Más de 4.5", "over", 4.5, CUOTAS_BASE_COLECTIVAS[(_COL_CAT_TARJETAS, "+4.5")]),
-    ("tot_cards", _COL_CAT_TARJETAS, "+5.5", "Tarjetas Totales Más de 5.5", "over", 5.5, CUOTAS_BASE_COLECTIVAS[(_COL_CAT_TARJETAS, "+5.5")]),
-    ("tot_cards", _COL_CAT_TARJETAS, "+6.5", "Tarjetas Totales Más de 6.5", "over", 6.5, CUOTAS_BASE_COLECTIVAS[(_COL_CAT_TARJETAS, "+6.5")]),
-    ("tot_cards", _COL_CAT_TARJETAS, "-3.5", "Tarjetas Totales Menos de 3.5", "under", 3.5, CUOTAS_BASE_COLECTIVAS[(_COL_CAT_TARJETAS, "-3.5")]),
-    ("tot_cards", _COL_CAT_TARJETAS, "-4.5", "Tarjetas Totales Menos de 4.5", "under", 4.5, CUOTAS_BASE_COLECTIVAS[(_COL_CAT_TARJETAS, "-4.5")]),
-    ("tot_cards", _COL_CAT_TARJETAS, "-5.5", "Tarjetas Totales Menos de 5.5", "under", 5.5, CUOTAS_BASE_COLECTIVAS[(_COL_CAT_TARJETAS, "-5.5")]),
-]
-
-_COL_ESCALERAS_PILLS = {
-    _COL_CAT_CORNERS: ["Todas", "+7.5", "+8.5", "+9.5", "+10.5", "+11.5", "-8.5", "-9.5", "-10.5"],
-    _COL_CAT_TARJETAS: ["Todas", "+2.5", "+3.5", "+4.5", "+5.5", "+6.5", "-3.5", "-4.5", "-5.5"],
-    _COL_CAT_GOLES: ["Todas", "+1.5", "+2.5", "+3.5", "+4.5", "-2.5", "-3.5"],
-    _COL_CAT_BTTS: ["Todos", "Sí (Ambos Marcan)", "No (Ambos Marcan)"],
-}
-
-
-def _col_filtrar_dataframe_competicion(df, comp_sel):
-    """Compuerta excluyente de competición (Cascade Filtering).
-
-    - 'Todas las Competiciones': devuelve copia íntegra, divs_activas=None, es_uefa=False.
-    - 'Competiciones UEFA': filtra explícitamente registros donde 'Div' pertenece a torneos UEFA.
-    - Ligas domésticas ('SP1', 'E0', 'I1', 'D1', 'F1'): filtra exclusivamente el código de liga.
-    """
-    if df is None or df.empty:
-        return pd.DataFrame(), None, False
-    if not comp_sel or comp_sel == "Todas las Competiciones":
-        return df.copy(), None, False
-
-    col_div = "Div" if "Div" in df.columns else next((c for c in df.columns if "Div" in str(c) or "Torneo" in str(c)), None)
-    if not col_div:
-        return df.copy(), None, False
-
-    s_div = df[col_div].astype(str).str.strip()
-    if comp_sel == "Competiciones UEFA":
-        s_up = s_div.str.upper()
-        mask_uefa = s_up.isin(_COL_CODIGOS_UEFA) | s_up.str.contains("CHAMPIONS|EUROPA|CONFERENCE|UEFA", regex=True, na=False)
-        return df[mask_uefa].copy(), ("UCL", "UEL", "UECL"), True
-
-    divs_cfg = _IND_FILTRO_COMPETICION.get(comp_sel)
-    if divs_cfg:
-        return df[s_div.isin(divs_cfg)].copy(), tuple(divs_cfg), False
-    return df.copy(), None, False
-
-
-def _col_proximos_cruces_competicion(df_filtrado, divs_activas=None, es_uefa=False):
-    """Extrae próximos cruces pertenecientes EXCLUSIVAMENTE a la competición seleccionada.
-
-    Si se selecciona 'Competiciones UEFA', jamás consulta ni mezcla partidos de ligas nacionales
-    (LaLiga, Premier League, Serie A, Bundesliga, Ligue 1).
-    """
-    cols = ["Equipo", "px_rival", "px_cond", "px_dt", "px_div"]
-    if df_filtrado is None or df_filtrado.empty:
-        return pd.DataFrame(columns=cols)
-
-    hoy = pd.Timestamp.now().normalize()
-    limite = hoy + pd.Timedelta(days=_IND_HORIZONTE_DIAS + 1)
-    partes = []
-
-    fut = df_filtrado[(~df_filtrado["Jugado"]) & (df_filtrado["Date"] >= hoy) & (df_filtrado["Date"] < limite)]
-    if not fut.empty:
-        partes.append(pd.DataFrame({
-            "Equipo": fut["HomeTeam"].values,
-            "px_rival": fut["AwayTeam"].values,
-            "px_cond": "Local",
-            "px_dt": fut["Date"].values,
-            "px_div": fut["Div"].values,
-            "src": 1,
-        }))
-        partes.append(pd.DataFrame({
-            "Equipo": fut["AwayTeam"].values,
-            "px_rival": fut["HomeTeam"].values,
-            "px_cond": "Visitante",
-            "px_dt": fut["Date"].values,
-            "px_div": fut["Div"].values,
-            "src": 1,
-        }))
-
-    # Solo consultar API de ligas domésticas si NO estamos en modo exclusivo UEFA
-    if not es_uefa:
-        if divs_activas is None:
-            divs_api = list(_IND_SPORT_KEYS.keys())
-        else:
-            divs_api = [d for d in divs_activas if d in _IND_SPORT_KEYS]
-
-        if divs_api:
-            equipos_comp = sorted(
-                pd.unique(pd.concat([df_filtrado["HomeTeam"], df_filtrado["AwayTeam"]]).dropna().astype(str)).tolist()
-            )
-            for d_code in divs_api:
-                sk = _IND_SPORT_KEYS.get(d_code)
-                eventos = _ind_fixtures_vivo(sk) or []
-                if not eventos:
-                    continue
-                ev = pd.DataFrame(eventos).dropna(subset=["home_team", "away_team", "commence_time"])
-                if ev.empty:
-                    continue
-                nombres = pd.unique(pd.concat([ev["home_team"], ev["away_team"]]))
-                mapa = {n: ev_resolver_equipo(n, equipos_comp) for n in nombres}
-                ev["h"] = ev["home_team"].map(mapa)
-                ev["a"] = ev["away_team"].map(mapa)
-                ev = ev.dropna(subset=["h", "a"])
-                ev = ev[ev["h"] != ev["a"]]
-                if ev.empty:
-                    continue
-                ts = pd.to_datetime(ev["commence_time"], errors="coerce", utc=True)
-                try:
-                    ts = ts.dt.tz_convert("Europe/Madrid")
-                except Exception:
-                    pass
-                ev["dt"] = ts.dt.tz_localize(None)
-                ev = ev[(ev["dt"] >= hoy) & (ev["dt"] < limite)]
-                if not ev.empty:
-                    partes.append(pd.DataFrame({
-                        "Equipo": ev["h"].values,
-                        "px_rival": ev["a"].values,
-                        "px_cond": "Local",
-                        "px_dt": ev["dt"].values,
-                        "px_div": d_code,
-                        "src": 0,
-                    }))
-                    partes.append(pd.DataFrame({
-                        "Equipo": ev["a"].values,
-                        "px_rival": ev["h"].values,
-                        "px_cond": "Visitante",
-                        "px_dt": ev["dt"].values,
-                        "px_div": d_code,
-                        "src": 0,
-                    }))
-
-    if not partes:
-        return pd.DataFrame(columns=cols)
-    todo = pd.concat(partes, ignore_index=True)
-    todo["px_dt"] = pd.to_datetime(todo["px_dt"])
-    todo["_dia"] = todo["px_dt"].dt.normalize()
-    todo = todo.sort_values(["_dia", "src", "px_dt"], kind="stable")
-    return todo.drop_duplicates("Equipo", keep="first")[cols].reset_index(drop=True)
-
-
-def _resolver_arbitro_partido(fixture_data, db_conn=None):
-    """Motor resiliente de resolución arbitral cruzado contra el censo transversal de 165 árbitros."""
-    badge_pend = (
-        "<span style='background:rgba(88,110,150,0.14);border:1px solid #3b4a63;color:#8b9bb4;"
-        "display:inline-block;padding:3px 9px;border-radius:10px;font-size:0.73rem;font-weight:600;white-space:nowrap;'>"
-        "⚖️ Colegiado: Pendiente de designación oficial</span>"
-    )
-    res_pendiente = {
-        "estado": "PENDIENTE",
-        "nombre": "",
-        "media": None,
-        "nivel": "pendiente",
-        "texto": "⚖️ Colegiado: Pendiente de designación oficial",
-        "badge_html": badge_pend,
-    }
-    if not isinstance(fixture_data, dict):
-        return res_pendiente
-
-    nombre_raw = ""
-    for k in ("referee", "arbitro", "Referee", "Arbitro", "colegiado"):
-        val = fixture_data.get(k)
-        if val is not None and str(val).strip() and str(val).strip().lower() not in (
-            "nan", "none", "null", "pendiente", "sin designar", "(pendiente de designación)"
-        ):
-            nombre_raw = str(val).strip()
-            break
-
-    h_eq = str(fixture_data.get("local") or fixture_data.get("HomeTeam") or fixture_data.get("equipo_local") or "").strip()
-    a_eq = str(fixture_data.get("visitante") or fixture_data.get("AwayTeam") or fixture_data.get("equipo_visitante") or "").strip()
-    fecha_raw = fixture_data.get("fecha") or fixture_data.get("px_dt") or fixture_data.get("Date")
-
-    if not nombre_raw and h_eq and a_eq:
-        try:
-            for fx_m in st.session_state.get("ev_fix_manual", []):
-                if isinstance(fx_m, dict) and fx_m.get("Local") == h_eq and fx_m.get("Visitante") == a_eq:
-                    r_man = str(fx_m.get("Arbitro") or fx_m.get("referee") or "").strip()
-                    if r_man and "pendiente" not in r_man.lower():
-                        nombre_raw = r_man
-                        break
-        except Exception:
-            pass
-
-    if not nombre_raw and h_eq and a_eq:
-        cerrar_conn = False
-        conn_use = db_conn
-        try:
-            if conn_use is None and RUTA_BD.exists():
-                conn_use = sqlite3.connect(RUTA_BD)
-                cerrar_conn = True
-            if conn_use is not None:
-                f_ts = pd.to_datetime(fecha_raw, errors="coerce", dayfirst=True) if fecha_raw is not None else pd.NaT
-                if pd.notna(f_ts):
-                    f_str = pd.Timestamp(f_ts).strftime("%d/%m/%Y")
-                    row = conn_use.execute(
-                        "SELECT Referee FROM historico_reciente WHERE HomeTeam=? AND AwayTeam=? AND Date=? "
-                        "AND Referee IS NOT NULL AND TRIM(Referee)<>'' ORDER BY rowid DESC LIMIT 1",
-                        (h_eq, a_eq, f_str),
-                    ).fetchone()
-                    if not row:
-                        row = conn_use.execute(
-                            "SELECT arbitro FROM partidos WHERE equipo_local=? AND equipo_visitante=? AND fecha=? "
-                            "AND arbitro IS NOT NULL AND TRIM(arbitro)<>'' LIMIT 1",
-                            (h_eq, a_eq, f_str),
-                        ).fetchone()
-                    if row and row[0]:
-                        nombre_raw = str(row[0]).strip()
-                if not nombre_raw:
-                    row = conn_use.execute(
-                        "SELECT Referee FROM historico_reciente WHERE HomeTeam=? AND AwayTeam=? AND FTHG IS NULL "
-                        "AND Referee IS NOT NULL AND TRIM(Referee)<>'' ORDER BY rowid DESC LIMIT 1",
-                        (h_eq, a_eq),
-                    ).fetchone()
-                    if row and row[0]:
-                        nombre_raw = str(row[0]).strip()
-        except Exception:
-            pass
-        finally:
-            if cerrar_conn and conn_use is not None:
-                try:
-                    conn_use.close()
-                except Exception:
-                    pass
-
-    canon = _normalizar_nombre_arbitro(nombre_raw) if nombre_raw else ""
-    if not canon:
-        return res_pendiente
-
-    try:
-        censo = _obtener_censo_global_arbitros()
-    except Exception:
-        censo = {}
-
-    info_censo = censo.get(canon)
-    if info_censo is None and censo:
-        canon_low = canon.lower()
-        for v_info in censo.values():
-            vars_low = [str(x).lower() for x in v_info.get("variantes", [])]
-            if canon_low == str(v_info.get("nombre", "")).lower() or canon_low in vars_low:
-                info_censo = v_info
-                break
-
-    if info_censo is not None:
-        nom_final = str(info_censo.get("nombre", canon))
-        am = float(info_censo.get("media_amarillas_global", 4.1))
-        rj = float(info_censo.get("media_rojas_global", 0.18))
-        media_tarj = round(am + rj, 2)
-    else:
-        nom_final = canon
-        media_tarj = 4.25
-
-    if media_tarj >= 5.0:
-        nivel = "favorable"
-        texto = f"⚖️ Colegiado Favorable: {nom_final} ({media_tarj:.1f} tarj/partido)"
-        estilo = "background:rgba(63,185,80,0.16);border:1px solid #3fb950;color:#3fb950;"
-    elif media_tarj <= 3.8:
-        nivel = "under"
-        texto = f"⚠️ Colegiado Under: {nom_final} ({media_tarj:.1f} tarj/partido)"
-        estilo = "background:rgba(240,136,62,0.16);border:1px solid #f0883e;color:#f0883e;"
-    else:
-        nivel = "neutro"
-        texto = f"⚖️ Colegiado: {nom_final} ({media_tarj:.1f} tarj/partido)"
-        estilo = "background:#161b22;border:1px solid #30363d;color:#c9d1d9;"
-
-    badge_html = (
-        f"<span style='{estilo}display:inline-block;padding:3px 9px;border-radius:10px;"
-        f"font-size:0.73rem;font-weight:700;white-space:nowrap;'>{_html_ind.escape(texto)}</span>"
-    )
-    return {
-        "estado": "DISPONIBLE",
-        "nombre": nom_final,
-        "media": media_tarj,
-        "nivel": nivel,
-        "texto": texto,
-        "badge_html": badge_html,
-    }
-
-
-@st.cache_data(ttl=600, show_spinner=False)
-def _col_calcular_tiers_equipos(df_global):
-    """Clasifica determinísticamente a los equipos según puntos reales acumulados en ligas domésticas.
-
-    - Ligas domésticas (LaLiga SP1, Premier E0, Serie A I1, Bundesliga D1, Ligue 1 F1):
-      * Posiciones 1 a 6: '👑 Top 6 / Líderes'
-      * Posiciones 7 a 14: '⚖️ Zona Media'
-      * Posiciones 15 en adelante: '⚠️ Zona Baja/Descenso'
-    - Equipos exclusivamente UEFA o sin tabla doméstica suficiente:
-      * Devuelve '🏆 Competición Europea' (evitando catalogar arbitrariamente a clubs modestos como Top 6).
-    """
-    if df_global is None or df_global.empty:
-        return {}
-    jug = df_global[df_global["Jugado"] & df_global["Div"].isin(_COL_LIGAS_DOMESTICAS)]
-    if jug.empty:
-        return {}
-
-    fthg = jug["FTHG"].values.astype(int)
-    ftag = jug["FTAG"].values.astype(int)
-    pts_h = np.where(fthg > ftag, 3, np.where(fthg == ftag, 1, 0))
-    pts_a = np.where(ftag > fthg, 3, np.where(fthg == ftag, 1, 0))
-    dg_h = fthg - ftag
-    dg_a = ftag - fthg
-
-    largo = pd.concat([
-        pd.DataFrame({"Equipo": jug["HomeTeam"].values, "Div": jug["Div"].values, "pts": pts_h, "dg": dg_h, "gf": fthg}),
-        pd.DataFrame({"Equipo": jug["AwayTeam"].values, "Div": jug["Div"].values, "pts": pts_a, "dg": dg_a, "gf": ftag}),
-    ], ignore_index=True)
-
-    tabla = largo.groupby(["Div", "Equipo"], as_index=False).agg(
-        pj=("pts", "size"),
-        pts=("pts", "sum"),
-        dg=("dg", "sum"),
-        gf=("gf", "sum"),
-    )
-    # Solo clasificar si el club tiene muestra real en su liga doméstica
-    tabla = tabla[tabla["pj"] >= 3].copy()
-    if tabla.empty:
-        return {}
-    tabla["ppg"] = tabla["pts"] / tabla["pj"].clip(lower=1)
-    tabla = tabla.sort_values(["Div", "pts", "ppg", "dg", "gf"], ascending=[True, False, False, False, False], kind="stable")
-    tabla["pos"] = tabla.groupby("Div").cumcount() + 1
-
-    tier_col = np.where(
-        tabla["pos"] <= 6,
-        _COL_TIER_TOP,
-        np.where(tabla["pos"] <= 14, _COL_TIER_MEDIA, _COL_TIER_BAJA),
-    )
-    return dict(zip(tabla["Equipo"], tier_col))
-
-
-def _col_aplanar_partidos_colectivos(df):
-    """Aplana en formato largo vectorizado (1 fila por equipo y partido jugado) las métricas colectivas."""
-    if df is None or df.empty:
-        return pd.DataFrame()
-    jug = df[df["Jugado"]]
-    if jug.empty:
-        return pd.DataFrame()
-
-    fthg = jug["FTHG"].values.astype(float)
-    ftag = jug["FTAG"].values.astype(float)
-    tot_goals = fthg + ftag
-    btts_val = ((fthg > 0) & (ftag > 0)).astype(float)
-
-    hc = jug["HC"].values.astype(float)
-    ac = jug["AC"].values.astype(float)
-    sin_corn = np.isnan(hc) | np.isnan(ac) | ((hc + ac) == 0)
-    tot_corners = np.where(sin_corn, np.nan, hc + ac)
-
-    hy = jug["HY"].values.astype(float)
-    ay = jug["AY"].values.astype(float)
-    hr = np.nan_to_num(jug["HR"].values.astype(float), nan=0.0)
-    ar = np.nan_to_num(jug["AR"].values.astype(float), nan=0.0)
-    sin_cards = np.isnan(hy) | np.isnan(ay)
-    tot_cards = np.where(sin_cards, np.nan, hy + ay + hr + ar)
-
-    marcador_h = pd.Series(fthg.astype(int)).astype(str).values + "-" + pd.Series(ftag.astype(int)).astype(str).values
-    marcador_a = pd.Series(ftag.astype(int)).astype(str).values + "-" + pd.Series(fthg.astype(int)).astype(str).values
-
-    df_h = pd.DataFrame({
-        "Fecha": jug["Date"].values,
-        "Equipo": jug["HomeTeam"].values,
-        "Rival": jug["AwayTeam"].values,
-        "Cond": "L",
-        "Div": jug["Div"].values,
-        "gf": fthg,
-        "ga": ftag,
-        "tot_goals": tot_goals,
-        "btts": btts_val,
-        "tot_corners": tot_corners,
-        "tot_cards": tot_cards,
-        "score_str": marcador_h,
-    })
-    df_a = pd.DataFrame({
-        "Fecha": jug["Date"].values,
-        "Equipo": jug["AwayTeam"].values,
-        "Rival": jug["HomeTeam"].values,
-        "Cond": "V",
-        "Div": jug["Div"].values,
-        "gf": ftag,
-        "ga": fthg,
-        "tot_goals": tot_goals,
-        "btts": btts_val,
-        "tot_corners": tot_corners,
-        "tot_cards": tot_cards,
-        "score_str": marcador_a,
-    })
-    largo = pd.concat([df_h, df_a], ignore_index=True)
-    largo["rival3"] = largo["Rival"].astype(str).str.upper().str[:3].str.strip()
-    return largo.sort_values("Fecha", ascending=False, kind="stable").reset_index(drop=True)
-
-
-def _col_poisson_prob_real(lam_val, k_int, tipo):
-    """Cálculo exacto de la probabilidad acumulada de Poisson para un parámetro Lambda (λ) real.
-
-    P(X >= k) = 1.0 - sum((math.exp(-λ) * (λ ** i)) / math.factorial(i) for i in range(k))
-    Acotado en [0.02, 0.98].
-    """
-    lam = max(float(lam_val), 0.05)
-    p_over = 1.0 - sum((math.exp(-lam) * (lam ** i)) / math.factorial(i) for i in range(int(k_int)))
-    prob = p_over if tipo == "over" else (1.0 - p_over)
-    return max(min(float(prob), 0.98), 0.02)
-
-
-def _col_evaluar_bloque_ventana(largo_df, ventana, min_winrate, mercados_filtrados, liga_eq_map, min_partidos=None):
-    """Pipeline de cálculo dinámico por equipo y mercado con Poisson real (cero constantes clonadas)."""
-    if largo_df is None or largo_df.empty or not mercados_filtrados:
-        return pd.DataFrame()
-
-    min_req = int(min_partidos) if min_partidos is not None else int(ventana)
-    partes = []
-    metricas_activas = sorted({m[0] for m in mercados_filtrados})
-    for met in metricas_activas:
-        sub = largo_df.dropna(subset=[met])
-        if sub.empty:
-            continue
-        w = sub.groupby("Equipo", sort=False).head(int(ventana))
-        w = w[w.groupby("Equipo")[met].transform("size") >= min_req]
-        if w.empty:
-            continue
-        if met == "btts":
-            etq_val = w["score_str"].astype(str) + " vs " + w["rival3"]
-        else:
-            etq_val = w[met].astype(int).astype(str) + " vs " + w["rival3"]
-        w = w.assign(chip=etq_val).iloc[::-1]
-
-        if met == "btts":
-            agg = w.groupby("Equipo", sort=False).agg(
-                Lambda=(met, "mean"),
-                lam_gf=("gf", "mean"),
-                lam_ga=("ga", "mean"),
-                n_real=(met, "size"),
-                vals=(met, list),
-                chips=("chip", list),
-            )
-        else:
-            agg = w.groupby("Equipo", sort=False).agg(
-                Lambda=(met, "mean"),
-                n_real=(met, "size"),
-                vals=(met, list),
-                chips=("chip", list),
-            )
-
-        n_arr_all = agg["n_real"].values.astype(int)
-        for (m_met, cat, cod_lin, etq_mkt, tipo, umbral, cuota_base) in mercados_filtrados:
-            if m_met != met:
-                continue
-            cuota_b = float(CUOTAS_BASE_COLECTIVAS.get((cat, cod_lin), cuota_base))
-            k_int = int(math.floor(umbral)) + 1
-
-            if met == "btts":
-                hits = np.array([
-                    sum((v >= 0.5) if tipo == "over" else (v < 0.5) for v in vs)
-                    for vs in agg["vals"]
-                ], dtype=int)
-                chips_list = [
-                    [(c, (v >= 0.5) if tipo == "over" else (v < 0.5)) for c, v in zip(cs, vs)]
-                    for cs, vs in zip(agg["chips"], agg["vals"])
-                ]
-            else:
-                hits = np.array([
-                    sum((v >= k_int) if tipo == "over" else (v < k_int) for v in vs)
-                    for vs in agg["vals"]
-                ], dtype=int)
-                chips_list = [
-                    [(c, (v >= k_int) if tipo == "over" else (v < k_int)) for c, v in zip(cs, vs)]
-                    for cs, vs in zip(agg["chips"], agg["vals"])
-                ]
-
-            wr = (hits / n_arr_all.astype(float)) * 100.0
-            mask_ok = wr >= float(min_winrate)
-            if not np.any(mask_ok):
-                continue
-
-            eqs_ok = agg.index.values[mask_ok]
-            hits_ok = hits[mask_ok]
-            n_ok = n_arr_all[mask_ok]
-            wr_ok = np.round(wr[mask_ok], 1)
-            lam_vals = agg["Lambda"].values[mask_ok]
-            chips_ok = [c for c, ok in zip(chips_list, mask_ok) if ok]
-
-            if met == "btts":
-                lgf_ok = agg["lam_gf"].values[mask_ok]
-                lga_ok = agg["lam_ga"].values[mask_ok]
-                probs_ok = []
-                for lgf, lga in zip(lgf_ok, lga_ok):
-                    p_si = (1.0 - math.exp(-max(float(lgf), 0.05))) * (1.0 - math.exp(-max(float(lga), 0.05)))
-                    p_b = p_si if tipo == "over" else (1.0 - p_si)
-                    probs_ok.append(max(min(float(p_b), 0.98), 0.02))
-                probs_arr = np.array(probs_ok, dtype=float)
-            else:
-                probs_arr = np.array(
-                    [_col_poisson_prob_real(lv, k_int, tipo) for lv in lam_vals],
-                    dtype=float,
-                )
-
-            cuota_justa_arr = np.round(1.0 / probs_arr, 2)
-            ev_arr = np.round(((probs_arr * cuota_b) - 1.0) * 100.0, 1)
-
-            partes.append(pd.DataFrame({
-                "Equipo": eqs_ok,
-                "Liga": [liga_eq_map.get(e, "N/A") for e in eqs_ok],
-                "Categoria": cat,
-                "CodigoLinea": cod_lin,
-                "Mercado": etq_mkt,
-                "Tipo": tipo,
-                "Umbral": umbral,
-                "Hits": hits_ok,
-                "N": n_ok,
-                "Winrate": wr_ok,
-                "Lambda": np.round(lam_vals.astype(float), 2),
-                "Prob": probs_arr,
-                "CuotaJusta": cuota_justa_arr,
-                "CuotaBase": cuota_b,
-                "EV": ev_arr,
-                "Chips": chips_ok,
-            }))
-
-    if not partes:
-        return pd.DataFrame()
-    return pd.concat(partes, ignore_index=True)
-
-
-def _escanear_radar_colectivo_vectorial(
-    df_filtrado,
-    df_global_tiers,
-    ventana=5,
-    min_winrate=75.0,
-    categoria=_COL_CAT_TODOS,
-    direccion="Todos",
-    codigo_linea="Todas",
-    modo_condicion="🌐 Global",
-    divs_activas=None,
-    es_uefa=False,
-    filtro_busqueda="Todos los Equipos",
-    tier_rival=_COL_TIER_TODOS,
-):
-    """Escáner vectorial estricto sobre `df_filtrado` (Cascade Filtering + Poisson real + Choque agrupado)."""
-    if df_filtrado is None or df_filtrado.empty:
-        return pd.DataFrame(), [], []
-
-    tiers_dom_map = _col_calcular_tiers_equipos(df_global_tiers)
-    largo_scope = _col_aplanar_partidos_colectivos(df_filtrado)
-    if largo_scope.empty:
-        return pd.DataFrame(), [], []
-
-    # Liga mostrada por equipo: en UEFA estrictamente torneo UEFA; en Global preferencia doméstica
-    if es_uefa:
-        liga_eq_map = (
-            largo_scope.drop_duplicates("Equipo")
-            .set_index("Equipo")["Div"]
-            .map(lambda d: _IND_NOMBRE_DIV.get(d, d))
-            .to_dict()
-        )
-    else:
-        pri_l = largo_scope.assign(_u=largo_scope["Div"].isin(_IND_UEFA_DIVS).astype(int)).sort_values(
-            ["_u", "Fecha"], ascending=[True, False], kind="stable"
-        )
-        liga_eq_map = (
-            pri_l.drop_duplicates("Equipo")
-            .set_index("Equipo")["Div"]
-            .map(lambda d: _IND_NOMBRE_DIV.get(d, d))
-            .to_dict()
-        )
-
-    mercados_activos = []
-    for m in _COL_CATALOGO_MERCADOS:
-        m_met, cat, cod_lin, etq_mkt, tipo, umbral, cuota_base = m
-        if categoria != _COL_CAT_TODOS and cat != categoria:
-            continue
-        if direccion in ("over", "under") and tipo != direccion:
-            continue
-        if codigo_linea not in ("Todas", "Todos", None) and cod_lin != codigo_linea:
-            continue
-        mercados_activos.append(m)
-
-    # Próximos cruces estrictamente pertenecientes a la competición filtrada
-    px_df = _col_proximos_cruces_competicion(df_filtrado, divs_activas=divs_activas, es_uefa=es_uefa)
-    px_map = {}
-    duelos_proximos = []
-    vistos_duelos = set()
-
-    conn_arb = None
-    try:
-        if RUTA_BD.exists():
-            conn_arb = sqlite3.connect(RUTA_BD)
-        if not px_df.empty:
-            for eq_r, riv_r, cond_r, dt_r, div_r in zip(
-                px_df["Equipo"].values,
-                px_df["px_rival"].values,
-                px_df["px_cond"].values,
-                px_df["px_dt"].values,
-                px_df["px_div"].values,
-            ):
-                loc_d = str(eq_r) if cond_r == "Local" else str(riv_r)
-                vis_d = str(riv_r) if cond_r == "Local" else str(eq_r)
-                par_key = (loc_d, vis_d)
-                if par_key not in vistos_duelos:
-                    vistos_duelos.add(par_key)
-                    arb_info = _resolver_arbitro_partido(
-                        {"local": loc_d, "visitante": vis_d, "fecha": dt_r}, db_conn=conn_arb
-                    )
-                    duelos_proximos.append({
-                        "local": loc_d,
-                        "visitante": vis_d,
-                        "px_dt": dt_r,
-                        "px_div": str(div_r),
-                        "liga_duelo": _IND_NOMBRE_DIV.get(str(div_r), str(div_r)),
-                        "arbitro": arb_info,
-                    })
-                px_map[str(eq_r)] = {
-                    "px_rival": str(riv_r),
-                    "px_cond": str(cond_r),
-                    "px_dt": dt_r,
-                    "px_div": str(div_r),
-                }
-    finally:
-        if conn_arb is not None:
-            try:
-                conn_arb.close()
-            except Exception:
-                pass
-
-    arb_por_duelo = {(d["local"], d["visitante"]): d["arbitro"] for d in duelos_proximos}
-    arb_pendiente_default = _resolver_arbitro_partido({})
-
-    def _resolver_tier_club(eq_nom):
-        if es_uefa:
-            return tiers_dom_map.get(eq_nom, _COL_TIER_UEFA)
-        return tiers_dom_map.get(eq_nom, _COL_TIER_UEFA if liga_eq_map.get(eq_nom) in ("Champions", "Europa League", "Conference") else _COL_TIER_GENERAL)
-
-    # Evaluación vectorial sobre el subconjunto exclusivo de la competición seleccionada
-    min_p_glob = min(int(ventana), 2) if es_uefa else int(ventana)
-    min_p_cond = min(int(ventana), 2) if es_uefa else int(ventana)
-    df_eval_global = _col_evaluar_bloque_ventana(
-        largo_scope, ventana, min_winrate, mercados_activos, liga_eq_map, min_partidos=min_p_glob
-    )
-    df_eval_loc = _col_evaluar_bloque_ventana(
-        largo_scope[largo_scope["Cond"] == "L"], ventana, min_winrate, mercados_activos, liga_eq_map, min_partidos=min_p_cond
-    )
-    df_eval_vis = _col_evaluar_bloque_ventana(
-        largo_scope[largo_scope["Cond"] == "V"], ventana, min_winrate, mercados_activos, liga_eq_map, min_partidos=min_p_cond
-    )
-
-    # En competiciones UEFA, si los mercados de Córners/Tarjetas carecen de muestras en ESPN,
-    # evaluar las métricas secundarias exclusivamente para los clubes UEFA activos manteniendo Liga y Cruce UEFA
-    if es_uefa and df_global_tiers is not None and not df_global_tiers.empty:
-        mkts_sec = [m for m in mercados_activos if m[0] in ("tot_corners", "tot_cards")]
-        if mkts_sec:
-            eqs_uefa_activos = set(largo_scope["Equipo"].unique())
-            largo_sec = _col_aplanar_partidos_colectivos(df_global_tiers)
-            largo_sec = largo_sec[largo_sec["Equipo"].isin(eqs_uefa_activos)]
-            if not largo_sec.empty:
-                sec_glob = _col_evaluar_bloque_ventana(largo_sec, ventana, min_winrate, mkts_sec, liga_eq_map)
-                sec_loc = _col_evaluar_bloque_ventana(largo_sec[largo_sec["Cond"] == "L"], ventana, min_winrate, mkts_sec, liga_eq_map)
-                sec_vis = _col_evaluar_bloque_ventana(largo_sec[largo_sec["Cond"] == "V"], ventana, min_winrate, mkts_sec, liga_eq_map)
-                if not sec_glob.empty:
-                    df_eval_global = pd.concat([df_eval_global, sec_glob], ignore_index=True) if not df_eval_global.empty else sec_glob
-                if not sec_loc.empty:
-                    df_eval_loc = pd.concat([df_eval_loc, sec_loc], ignore_index=True) if not df_eval_loc.empty else sec_loc
-                if not sec_vis.empty:
-                    df_eval_vis = pd.concat([df_eval_vis, sec_vis], ignore_index=True) if not df_eval_vis.empty else sec_vis
-
-    if "Estricto" in str(modo_condicion):
-        partes_est = []
-        if not df_eval_loc.empty:
-            cond_px_loc = df_eval_loc["Equipo"].map(lambda e: px_map.get(e, {}).get("px_cond", "Local"))
-            partes_est.append(df_eval_loc[cond_px_loc == "Local"])
-        if not df_eval_vis.empty:
-            cond_px_vis = df_eval_vis["Equipo"].map(lambda e: px_map.get(e, {}).get("px_cond", "Visitante"))
-            partes_est.append(df_eval_vis[cond_px_vis == "Visitante"])
-        df_feed = pd.concat(partes_est, ignore_index=True) if partes_est else pd.DataFrame()
-    else:
-        df_feed = df_eval_global.copy()
-
-    if not df_feed.empty:
-        df_feed["px_rival"] = df_feed["Equipo"].map(lambda e: px_map.get(e, {}).get("px_rival"))
-        df_feed["px_cond"] = df_feed["Equipo"].map(lambda e: px_map.get(e, {}).get("px_cond"))
-        df_feed["px_dt"] = df_feed["Equipo"].map(lambda e: px_map.get(e, {}).get("px_dt"))
-        df_feed["TierEquipo"] = df_feed["Equipo"].map(_resolver_tier_club)
-        df_feed["TierRival"] = df_feed["px_rival"].map(lambda r: _resolver_tier_club(r) if r else None)
-        df_feed["TierRef"] = np.where(
-            df_feed["TierRival"].notna(),
-            df_feed["TierRival"],
-            df_feed["TierEquipo"],
-        )
-
-        def _arb_de_equipo(eq_nom):
-            info = px_map.get(eq_nom)
-            if not info or not info.get("px_rival"):
-                return arb_pendiente_default
-            par = (eq_nom, info["px_rival"]) if info.get("px_cond") == "Local" else (info["px_rival"], eq_nom)
-            return arb_por_duelo.get(par, arb_pendiente_default)
-
-        df_feed["ArbitroInfo"] = df_feed["Equipo"].map(_arb_de_equipo)
-
-        if filtro_busqueda and filtro_busqueda != "Todos los Equipos":
-            if " vs " in filtro_busqueda:
-                h_b, a_b = [x.strip() for x in filtro_busqueda.split(" vs ", 1)]
-                df_feed = df_feed[df_feed["Equipo"].isin([h_b, a_b])]
-            else:
-                df_feed = df_feed[
-                    (df_feed["Equipo"] == filtro_busqueda) | (df_feed["px_rival"] == filtro_busqueda)
-                ]
-
-        if tier_rival and tier_rival != _COL_TIER_TODOS:
-            df_feed = df_feed[(df_feed["TierRef"] == tier_rival) | (df_feed["TierEquipo"] == tier_rival)]
-
-        df_feed = df_feed.sort_values(["EV", "Winrate", "Lambda"], ascending=[False, False, False], kind="stable").reset_index(drop=True)
-
-    # ── Choque de Tendencias Agrupado por Fixture Único (fixture_id = f"{local}_{visitante}_{fecha}") ──
-    base_h = df_eval_loc if not df_eval_loc.empty else df_eval_global
-    base_a = df_eval_vis if not df_eval_vis.empty else df_eval_global
-    idx_h = {
-        (r["Equipo"], r["Categoria"], r["CodigoLinea"]): r
-        for r in (base_h.to_dict("records") if not base_h.empty else [])
-    }
-    idx_a = {
-        (r["Equipo"], r["Categoria"], r["CodigoLinea"]): r
-        for r in (base_a.to_dict("records") if not base_a.empty else [])
-    }
-    idx_g = {
-        (r["Equipo"], r["Categoria"], r["CodigoLinea"]): r
-        for r in (df_eval_global.to_dict("records") if not df_eval_global.empty else [])
-    }
-
-    choques_por_fixture = {}
-    equipos_scope_set = set(largo_scope["Equipo"].unique())
-    for duelo in duelos_proximos:
-        loc_eq = duelo["local"]
-        vis_eq = duelo["visitante"]
-        if loc_eq not in equipos_scope_set and vis_eq not in equipos_scope_set:
-            continue
-        if filtro_busqueda and filtro_busqueda != "Todos los Equipos":
-            if " vs " in filtro_busqueda:
-                if f"{loc_eq} vs {vis_eq}" != filtro_busqueda:
-                    continue
-            elif filtro_busqueda not in (loc_eq, vis_eq):
-                continue
-
-        t_loc = _resolver_tier_club(loc_eq)
-        t_vis = _resolver_tier_club(vis_eq)
-        if tier_rival and tier_rival != _COL_TIER_TODOS:
-            if t_loc != tier_rival and t_vis != tier_rival:
-                continue
-
-        f_ts = pd.Timestamp(duelo["px_dt"]) if pd.notna(duelo["px_dt"]) else None
-        fecha_key = f_ts.strftime("%Y-%m-%d") if f_ts is not None else "prox"
-        fixture_id = f"{loc_eq}_{vis_eq}_{fecha_key}"
-
-        for (m_met, cat, cod_lin, etq_mkt, tipo, umbral, cuota_base) in mercados_activos:
-            rh = idx_h.get((loc_eq, cat, cod_lin)) or idx_g.get((loc_eq, cat, cod_lin))
-            ra = idx_a.get((vis_eq, cat, cod_lin)) or idx_g.get((vis_eq, cat, cod_lin))
-            if not rh or not ra:
-                continue
-
-            cuota_b = float(CUOTAS_BASE_COLECTIVAS.get((cat, cod_lin), cuota_base))
-            lam_comb = round((float(rh["Lambda"]) + float(ra["Lambda"])) / 2.0, 2)
-            p_comb = max(min((float(rh["Prob"]) + float(ra["Prob"])) / 2.0, 0.98), 0.02)
-            cj_comb = round(1.0 / p_comb, 2)
-            ev_comb = round(((p_comb * cuota_b) - 1.0) * 100.0, 1)
-            wr_comb = round((float(rh["Winrate"]) + float(ra["Winrate"])) / 2.0, 1)
-
-            item_conv = {
-                "categoria": cat,
-                "codigo_linea": cod_lin,
-                "mercado": f"{cat} · {etq_mkt}",
-                "etiqueta_corta": etq_mkt,
-                "racha_local": rh,
-                "racha_visit": ra,
-                "lam_comb": lam_comb,
-                "wr_comb": wr_comb,
-                "prob_comb": p_comb,
-                "cuota_justa": cj_comb,
-                "cuota_base": cuota_b,
-                "ev_comb": ev_comb,
-            }
-            if fixture_id not in choques_por_fixture:
-                choques_por_fixture[fixture_id] = {
-                    "fixture_id": fixture_id,
-                    "partido": f"{loc_eq} vs {vis_eq}",
-                    "local": loc_eq,
-                    "visitante": vis_eq,
-                    "liga": duelo.get("liga_duelo") or rh.get("Liga", "N/A"),
-                    "px_dt": duelo["px_dt"],
-                    "arbitro": duelo["arbitro"],
-                    "tier_local": t_loc,
-                    "tier_visit": t_vis,
-                    "convergencias": [],
-                }
-            choques_por_fixture[fixture_id]["convergencias"].append(item_conv)
-
-    choques_agrupados = []
-    for fx_id, grp in choques_por_fixture.items():
-        convs = sorted(grp["convergencias"], key=lambda x: (x["ev_comb"], x["wr_comb"]), reverse=True)
-        grp["convergencias"] = convs
-        grp["max_ev"] = max(c["ev_comb"] for c in convs)
-        grp["max_wr"] = max(c["wr_comb"] for c in convs)
-        grp["n_conv"] = len(convs)
-        choques_agrupados.append(grp)
-
-    choques_agrupados.sort(key=lambda x: (x["n_conv"], x["max_ev"], x["max_wr"]), reverse=True)
-
-    # ── Generador de Packs Bet Builder para Paf (Mismo Encuentro de la Competición Activa, Winrate >= 80%) ──
-    df_all_cats = _col_evaluar_bloque_ventana(
-        largo_scope, ventana, 80.0, _COL_CATALOGO_MERCADOS, liga_eq_map, min_partidos=min_p_glob
-    )
-    if es_uefa and df_global_tiers is not None and not df_global_tiers.empty:
-        mkts_all_sec = [m for m in _COL_CATALOGO_MERCADOS if m[0] in ("tot_corners", "tot_cards")]
-        eqs_uefa_act = set(largo_scope["Equipo"].unique())
-        largo_sec_all = _col_aplanar_partidos_colectivos(df_global_tiers)
-        largo_sec_all = largo_sec_all[largo_sec_all["Equipo"].isin(eqs_uefa_act)]
-        if not largo_sec_all.empty:
-            sec_all = _col_evaluar_bloque_ventana(largo_sec_all, ventana, 80.0, mkts_all_sec, liga_eq_map)
-            if not sec_all.empty:
-                df_all_cats = pd.concat([df_all_cats, sec_all], ignore_index=True) if not df_all_cats.empty else sec_all
-    por_equipo_80 = {}
-    if not df_all_cats.empty:
-        for r80 in df_all_cats.to_dict("records"):
-            por_equipo_80.setdefault(r80["Equipo"], []).append(r80)
-
-    packs_bet_builder = []
-    for duelo in duelos_proximos:
-        loc_eq = duelo["local"]
-        vis_eq = duelo["visitante"]
-        if loc_eq not in equipos_scope_set and vis_eq not in equipos_scope_set:
-            continue
-        if filtro_busqueda and filtro_busqueda != "Todos los Equipos":
-            if " vs " in filtro_busqueda and f"{loc_eq} vs {vis_eq}" != filtro_busqueda:
-                continue
-            elif " vs " not in filtro_busqueda and filtro_busqueda not in (loc_eq, vis_eq):
-                continue
-
-        if tier_rival and tier_rival != _COL_TIER_TODOS:
-            if _resolver_tier_club(loc_eq) != tier_rival and _resolver_tier_club(vis_eq) != tier_rival:
-                continue
-
-        candidatos_cat = {}
-        for eq_p, rol_p in ((loc_eq, loc_eq), (vis_eq, vis_eq)):
-            for r80 in por_equipo_80.get(eq_p, []):
-                if float(r80["EV"]) <= 0.0:
-                    continue
-                cat_c = r80["Categoria"]
-                leg = {
-                    "cat": cat_c,
-                    "etiqueta": r80["Mercado"],
-                    "origen": rol_p,
-                    "wr": float(r80["Winrate"]),
-                    "prob": float(r80["Prob"]),
-                    "cuota_base": float(r80["CuotaBase"]),
-                    "ev": float(r80["EV"]),
-                }
-                prev = candidatos_cat.get(cat_c)
-                if prev is None or (leg["ev"], leg["wr"]) > (prev["ev"], prev["wr"]):
-                    candidatos_cat[cat_c] = leg
-
-        legs = sorted(candidatos_cat.values(), key=lambda x: (x["ev"], x["wr"]), reverse=True)[:3]
-        if len(legs) < 2:
-            continue
-
-        p_prod = float(np.prod([x["prob"] for x in legs]))
-        p_comp = max(min(p_prod, 0.92), 0.04)
-        cuota_justa_bb = round(1.0 / p_comp, 2)
-        cuota_paf_sug = round(float(np.prod([x["cuota_base"] for x in legs])) * 0.90, 2)
-        wr_med = round(float(np.mean([x["wr"] for x in legs])), 1)
-
-        packs_bet_builder.append({
-            "partido": f"{loc_eq} vs {vis_eq}",
-            "liga": duelo.get("liga_duelo") or liga_eq_map.get(loc_eq, "N/A"),
-            "px_dt": duelo["px_dt"],
-            "arbitro": duelo["arbitro"],
-            "legs": legs,
-            "prob_compuesta": round(p_comp * 100.0, 1),
-            "cuota_teorica": cuota_justa_bb,
-            "cuota_paf": cuota_paf_sug,
-            "wr_medio": wr_med,
-        })
-
-    packs_bet_builder.sort(key=lambda x: (x["wr_medio"], x["prob_compuesta"]), reverse=True)
-    return df_feed, choques_agrupados, packs_bet_builder
-
-
-def _col_render_bet_builder_paf(packs):
-    """Renderiza el bloque Glassmorphism '⚡ Bet Builder Sugerido Paf (Correlación Mismo Partido)'."""
-    if not packs:
-        return
-    st.markdown("#### ⚡ Bet Builder Sugerido Paf (Correlación Mismo Partido · Winrate ≥ 80%)")
-    cards_bb = []
-    for pk in packs[:4]:
-        f_ts = pd.Timestamp(pk["px_dt"]) if pd.notna(pk["px_dt"]) else None
-        if f_ts is not None:
-            hora_s = f" {f_ts.strftime('%H:%M')}" if (f_ts.hour or f_ts.minute) else ""
-            fecha_lbl = f"🗓️ {f_ts.strftime('%d/%m')}{hora_s}"
-        else:
-            fecha_lbl = "🗓️ Próxima Jornada"
-        legs_html = "".join(
-            "<div style='background:rgba(137,87,229,0.16);border:1px solid rgba(137,87,229,0.55);"
-            "border-radius:8px;padding:5px 9px;margin:4px 0;display:flex;justify-content:space-between;"
-            "align-items:center;font-size:0.78rem;'>"
-            f"<span style='color:#e2c5ff;font-weight:700;'>➕ {_html_ind.escape(lg['etiqueta'])} "
-            f"<span style='color:#8b949e;font-weight:500;'>({_html_ind.escape(lg['origen'])})</span></span>"
-            f"<span style='color:#3fb950;font-weight:800;font-family:monospace;'>{lg['wr']:.0f}% · @{lg['cuota_base']:.2f}</span>"
-            "</div>"
-            for lg in pk["legs"]
-        )
-        arb_html = pk["arbitro"]["badge_html"] if isinstance(pk.get("arbitro"), dict) else ""
-        cards_bb.append(
-            "<div style='background:#161b22;border:1px solid #8957e5;border-top:3px solid #d29922;"
-            "border-radius:12px;padding:15px 17px;box-shadow:0 8px 24px rgba(137,87,229,0.18);'>"
-            "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;'>"
-            "<span style='background:rgba(210,153,34,0.18);border:1px solid #d29922;color:#f2cc60;"
-            "font-size:0.72rem;font-weight:800;padding:2px 9px;border-radius:12px;'>⚡ Paf Bet Builder Pack</span>"
-            f"<span style='color:#d2a8ff;font-size:0.76rem;font-weight:700;'>{fecha_lbl}</span>"
-            "</div>"
-            f"<h3 style='margin:3px 0;color:#f0f6fc;font-size:1.06rem;'>⚽ {_html_ind.escape(pk['partido'])}</h3>"
-            f"<div style='color:#58a6ff;font-size:0.76rem;font-weight:600;margin-bottom:6px;'>{_html_ind.escape(str(pk['liga']))}</div>"
-            f"<div style='margin-bottom:8px;'>{arb_html}</div>"
-            f"<div>{legs_html}</div>"
-            "<div style='display:flex;justify-content:space-between;align-items:center;border-top:1px solid #30363d;"
-            "padding-top:9px;margin-top:8px;font-size:0.77rem;color:#8b949e;'>"
-            f"<span>Prob. Compuesta<b style='color:#f0f6fc;display:block;font-size:0.9rem;'>{pk['prob_compuesta']:.1f}%</b></span>"
-            f"<span>Cuota Teórica<b style='color:#79c0ff;display:block;font-size:0.9rem;'>{pk['cuota_teorica']:.2f}</b></span>"
-            f"<span>Cuota Sugerida Paf<b style='color:#f2cc60;display:block;font-size:0.94rem;'>@{pk['cuota_paf']:.2f}</b></span>"
-            "</div></div>"
-        )
-    st.markdown(f"<div class='ind-grid'>{''.join(cards_bb)}</div>", unsafe_allow_html=True)
-
-
-def render_radar_tendencias():
-    """Módulo Colectivo: Radar Cuantitativo de Tendencias & Convergencia EV+ (RFC-FIX-V3)."""
-    st.markdown(
-        "<style>"
-        ".col-hero{background:linear-gradient(135deg,#0e1117 0%,#161b22 60%,#21262d 100%);"
-        "border:1px solid #30363d;border-left:4px solid #38bdf8;border-radius:12px;"
-        "padding:20px 24px;margin-bottom:18px;}"
-        ".col-hero h2{margin:0;color:#38bdf8;font-weight:700;font-size:1.45rem;}"
-        ".col-hero p{margin:6px 0 10px 0;color:#8b949e;font-size:0.92rem;}"
-        ".ind-badge{display:inline-block;margin-right:8px;padding:4px 12px;border-radius:20px;"
-        "font-size:0.78rem;font-weight:600;background:rgba(56,139,253,0.15);border:1px solid #388bfd;color:#58a6ff;}"
-        ".ind-badge.g{background:rgba(63,185,80,0.12);border-color:#238636;color:#3fb950;}"
-        ".ind-badge.off{background:#161b22;border-color:#30363d;color:#8b949e;opacity:0.85;}"
-        ".ind-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-bottom:22px;}"
-        ".ind-card{background:#0d1117;border:1px solid #30363d;border-top:3px solid #3fb950;"
-        "border-radius:12px;padding:14px 16px;box-shadow:0 8px 22px rgba(0,0,0,0.35);}"
-        ".ind-card .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}"
-        ".ind-tag{font-size:0.72rem;font-weight:700;padding:3px 9px;border-radius:12px;"
-        "background:rgba(88,166,255,0.14);border:1px solid #1f6feb;color:#58a6ff;white-space:nowrap;}"
-        ".ind-ev{font-size:0.78rem;font-weight:800;padding:3px 10px;border-radius:12px;"
-        "background:rgba(63,185,80,0.16);border:1px solid #3fb950;color:#3fb950;}"
-        ".ind-ev.neg{background:rgba(218,54,51,0.14);border-color:#da3633;color:#ff7b72;}"
-        ".ind-card h3{margin:2px 0 2px 0;color:#f0f6fc;font-size:1.12rem;}"
-        ".ind-liga{color:#58a6ff;font-size:0.78rem;font-weight:600;}"
-        ".ind-next{margin:8px 0;padding:6px 10px;background:#161b22;border:1px solid #21262d;"
-        "border-radius:8px;color:#c9d1d9;font-size:0.8rem;}"
-        ".ind-mkt{color:#79c0ff;font-weight:700;font-size:0.9rem;margin:4px 0 8px 0;}"
-        ".ind-met{display:flex;justify-content:space-between;gap:6px;font-size:0.78rem;color:#8b949e;"
-        "border-top:1px solid #21262d;padding-top:8px;margin-top:6px;}"
-        ".ind-met b{color:#f0f6fc;display:block;font-size:0.9rem;}"
-        ".ind-wrap{background:#0d1117;border:1px solid #30363d;border-radius:12px;overflow-x:auto;padding:4px;}"
-        ".ind-tbl{width:100%;border-collapse:collapse;font-size:0.8rem;color:#c9d1d9;min-width:1100px;}"
-        ".ind-tbl th{background:#161b22;color:#8b949e;text-align:left;padding:10px 10px;font-size:0.7rem;"
-        "letter-spacing:0.05em;border-bottom:1px solid #30363d;white-space:nowrap;}"
-        ".ind-tbl td{padding:9px 10px;border-bottom:1px solid #21262d;vertical-align:middle;}"
-        ".ind-tbl tr:hover td{background:#161b22;}"
-        ".ind-evb{background:rgba(63,185,80,0.16);border:1px solid #3fb950;color:#3fb950;"
-        "padding:2px 9px;border-radius:10px;font-weight:800;white-space:nowrap;}"
-        ".ind-evb.neg{background:rgba(218,54,51,0.14);border-color:#da3633;color:#ff7b72;}"
-        ".col-tier{display:inline-block;padding:2px 8px;border-radius:8px;font-size:0.71rem;font-weight:600;"
-        "background:rgba(56,139,253,0.12);border:1px solid #30363d;color:#79c0ff;margin-left:6px;}"
-        "</style>"
-        "<div class='col-hero'>"
-        "<h2>🎯 Radar Cuantitativo de Tendencias &amp; Convergencia EV+ (Colectivo)</h2>"
-        "<p>Escáner institucional de totales de partido (Goles, BTTS, Córners y Tarjetas) calibrado con Poisson real por equipo, "
-        "filtrado en cascada por competición, cruce arbitral sobre el censo de 165 colegiados y Bet Builder Paf.</p>"
-        "<span class='ind-badge'>Kambi / Paf Bet Builder Ready</span>"
-        "<span class='ind-badge g'>Poisson Real &amp; Referee Engine Activo</span>"
-        "</div>",
-        unsafe_allow_html=True,
-    )
-
-    df_raw = _cargar_dataset_props_vectorial()
-    if df_raw.empty:
-        st.warning("No se hallaron registros históricos en `macro_base_futbol.db`.")
-        return
-
-    # ── FILA 1: Contexto, Búsqueda y Tier de Rival (Cascade Filtering) ───────
-    f1c1, f1c2, f1c3, f1c4 = st.columns([1.15, 1.25, 1.2, 1.6])
-    with f1c1:
-        comp_sel = st.selectbox(
-            "🌍 Competición",
-            list(_IND_FILTRO_COMPETICION.keys()),
-            key="col_radar_comp",
-        )
-
-    df_filtrado, divs_activas, es_uefa = _col_filtrar_dataframe_competicion(df_raw, comp_sel)
-
-    with f1c2:
-        cond_sel = st.pills(
-            "🏠 Condición de Campo",
-            ["🌐 Global", "🏠 Local/Visitante Estricto"],
-            default="🌐 Global",
-            key="col_radar_cond",
-        ) or "🌐 Global"
-
-    with f1c3:
-        equipos_disp = (
-            sorted(pd.unique(pd.concat([df_filtrado["HomeTeam"], df_filtrado["AwayTeam"]]).dropna().astype(str)).tolist())
-            if not df_filtrado.empty
-            else []
-        )
-        px_sub = _col_proximos_cruces_competicion(df_filtrado, divs_activas=divs_activas, es_uefa=es_uefa)
-        duelos_opts = []
-        if not px_sub.empty:
-            loc_px = px_sub[px_sub["px_cond"] == "Local"]
-            for eh, ea in zip(loc_px["Equipo"].values, loc_px["px_rival"].values):
-                duelos_opts.append(f"{eh} vs {ea}")
-        opciones_busq = ["Todos los Equipos"] + duelos_opts + equipos_disp
-        busq_sel = st.selectbox(
-            "🔍 Partido / Equipo",
-            opciones_busq,
-            key=f"col_radar_equipo_{comp_sel}",
-        )
-
-    with f1c4:
-        tier_sel = st.pills(
-            "🎖️ Nivel del Rival (Tier)",
-            [_COL_TIER_TODOS, _COL_TIER_TOP, _COL_TIER_MEDIA, _COL_TIER_BAJA],
-            default=_COL_TIER_TODOS,
-            key="col_radar_tier",
-        ) or _COL_TIER_TODOS
-
-    # ── FILA 2: Categorías Colectivas y Escalera Reactiva de Líneas ──────────
-    cat_sel = st.pills(
-        "📊 Categoría de Mercado",
-        [_COL_CAT_TODOS, _COL_CAT_GOLES, _COL_CAT_BTTS, _COL_CAT_CORNERS, _COL_CAT_TARJETAS],
-        default=_COL_CAT_TODOS,
-        key="col_radar_cat",
-    ) or _COL_CAT_TODOS
-
-    direccion_sel = "Todos"
-    linea_sel = "Todas"
-    if cat_sel == _COL_CAT_TODOS:
-        st.markdown(
-            "<span class='ind-badge off'>📡 Barrido Multimercado Colectivo Activo</span>",
-            unsafe_allow_html=True,
-        )
-    elif cat_sel == _COL_CAT_BTTS:
-        linea_sel = st.pills(
-            "Línea Ambos Marcan (BTTS)",
-            _COL_ESCALERAS_PILLS[_COL_CAT_BTTS],
-            default="Todos",
-            key="col_radar_lin_btts",
-        ) or "Todos"
-    else:
-        slug_map = {
-            _COL_CAT_CORNERS: "corners",
-            _COL_CAT_TARJETAS: "tarjetas",
-            _COL_CAT_GOLES: "goles",
-        }
-        slug = slug_map.get(cat_sel, "gen")
-        f2d1, f2d2 = st.columns([1.1, 2.5])
-        with f2d1:
-            dir_lbl = st.segmented_control(
-                "Dirección de Línea",
-                ["Todos", "Overs (+)", "Unders (-)"],
-                default="Todos",
-                key=f"col_radar_dir_{slug}",
-            ) or "Todos"
-            direccion_sel = {"Todos": "Todos", "Overs (+)": "over", "Unders (-)": "under"}[dir_lbl]
-        with f2d2:
-            opciones_lin = _COL_ESCALERAS_PILLS[cat_sel]
-            if direccion_sel == "over":
-                opciones_lin = ["Todas"] + [x for x in opciones_lin if x.startswith("+")]
-            elif direccion_sel == "under":
-                opciones_lin = ["Todas"] + [x for x in opciones_lin if x.startswith("-")]
-            linea_sel = st.pills(
-                "Escalera de Líneas",
-                opciones_lin,
-                default="Todas",
-                key=f"col_radar_lin_{slug}_{direccion_sel}",
-            ) or "Todas"
-
-    # ── FILA 3: Afinación Cuantitativa ───────────────────────────────────────
-    f3c1, f3c2 = st.columns([1.4, 1.6])
-    with f3c1:
-        umbral_sel = st.slider(
-            "🔥 Racha Mínima (%)",
-            50,
-            100,
-            75,
-            step=5,
-            key="col_radar_umbral",
-        )
-    with f3c2:
-        ventana_sel = st.pills(
-            "📆 Muestra de Partidos",
-            [3, 5, 8, 10, 15],
-            default=5,
-            format_func=lambda x: f"{x} partidos",
-            key="col_radar_ventana",
-        ) or 5
-
-    df_feed, choques_agrupados, packs_bb = _escanear_radar_colectivo_vectorial(
-        df_filtrado,
-        df_raw,
-        ventana=ventana_sel,
-        min_winrate=float(umbral_sel),
-        categoria=cat_sel,
-        direccion=direccion_sel,
-        codigo_linea=linea_sel,
-        modo_condicion=cond_sel,
-        divs_activas=divs_activas,
-        es_uefa=es_uefa,
-        filtro_busqueda=busq_sel,
-        tier_rival=tier_sel,
-    )
-
-    tab_feed, tab_choque = st.tabs([
-        "🌟 Feed Rápido (Partidos)",
-        "⚔️ Choque de Tendencias (Partidos)",
-    ])
-
-    # ── PESTAÑA 1: FEED RÁPIDO (PARTIDOS) ────────────────────────────────────
-    with tab_feed:
-        if df_feed.empty:
-            st.info(f"Ningún equipo o partido de '{comp_sel}' supera el {umbral_sel}% de racha bajo los filtros seleccionados.")
-        else:
-            reg_feed = df_feed.to_dict("records")
-            # Seleccionar Top 4 priorizando oportunidades EV+ de equipos distintos para máxima diversidad analítica
-            top4_sel = []
-            eqs_vistos = set()
-            for r in reg_feed:
-                if r["Equipo"] not in eqs_vistos:
-                    top4_sel.append(r)
-                    eqs_vistos.add(r["Equipo"])
-                if len(top4_sel) == 4:
-                    break
-            if len(top4_sel) < 4:
-                for r in reg_feed:
-                    if r not in top4_sel:
-                        top4_sel.append(r)
-                    if len(top4_sel) == 4:
-                        break
-
-            st.markdown("#### 💎 Top 4 Oportunidades Colectivas de Mayor Valor Esperado (EV+)")
-            cards_top4 = []
-            for r in top4_sel:
-                cruce_txt = _ind_cruce_txt(r["px_rival"], r["px_cond"], r["px_dt"])
-                tier_badge = f"<span class='col-tier'>{_html_ind.escape(str(r.get('TierRef', '')))}</span>"
-                arb_badge = r["ArbitroInfo"]["badge_html"] if isinstance(r.get("ArbitroInfo"), dict) else ""
-                ev_cls_card = "ind-ev" if r["EV"] >= 0 else "ind-ev neg"
-                cards_top4.append(
-                    "<div class='ind-card'>"
-                    "<div class='top'><span class='ind-tag'>⚔️ Total Colectivo</span>"
-                    f"<span class='{ev_cls_card}'>EV {r['EV']:+.1f}%</span></div>"
-                    f"<h3>{_html_ind.escape(str(r['Equipo']))}{tier_badge}</h3>"
-                    f"<div class='ind-liga'>{_html_ind.escape(str(r['Liga']))} · Media: {r['Lambda']:.2f}</div>"
-                    f"<div class='ind-next'>{cruce_txt}</div>"
-                    f"<div style='margin:6px 0;'>{arb_badge}</div>"
-                    f"<div class='ind-mkt'>{_html_ind.escape(r['Mercado'])}</div>"
-                    "<div class='ind-met'>"
-                    f"<span>Racha<b>{r['Hits']}/{r['N']} [{r['Winrate']:.0f}%]</b></span>"
-                    f"<span>Cuota Justa<b>{r['CuotaJusta']:.2f}</b></span>"
-                    f"<span>Cuota Base<b>{r['CuotaBase']:.2f}</b></span></div>"
-                    f"<div style='margin-top:8px;'>{_ind_chips_html(r['Chips'])}</div>"
-                    "</div>"
-                )
-            st.markdown(f"<div class='ind-grid'>{''.join(cards_top4)}</div>", unsafe_allow_html=True)
-
-            # Bloque Bet Builder Sugerido Paf antes de la tabla maestra
-            _col_render_bet_builder_paf(packs_bb)
-
-            st.markdown(f"#### 📋 Tabla Maestra de Oportunidades Colectivas (Winrate ≥ {umbral_sel}%)")
-            filas_html = []
-            for r in reg_feed[:200]:
-                ev_cls = "ind-evb" if r["EV"] >= 0 else "ind-evb neg"
-                cruce_txt = _ind_cruce_txt(r["px_rival"], r["px_cond"], r["px_dt"])
-                arb_b = r["ArbitroInfo"]["badge_html"] if isinstance(r.get("ArbitroInfo"), dict) else ""
-                tier_lbl = _html_ind.escape(str(r.get("TierRef", "")))
-                filas_html.append(
-                    "<tr>"
-                    "<td><span class='ind-tag'>⚔️ Partido</span></td>"
-                    f"<td><b style='color:#f0f6fc;'>{_html_ind.escape(str(r['Equipo']))}</b>"
-                    f"<div class='ind-liga'>{_html_ind.escape(str(r['Liga']))} · {tier_lbl}</div></td>"
-                    f"<td><div>{cruce_txt}</div><div style='margin-top:4px;'>{arb_b}</div></td>"
-                    f"<td style='color:#79c0ff;font-weight:600;'>{_html_ind.escape(r['Mercado'])}</td>"
-                    f"<td><b>{r['Hits']}/{r['N']}</b> <span style='color:#8b949e;'>[{r['Winrate']:.0f}%]</span></td>"
-                    f"<td>{_ind_chips_html(r['Chips'])}</td>"
-                    f"<td><b>{r['CuotaJusta']:.2f}</b></td>"
-                    f"<td>{r['CuotaBase']:.2f}</td>"
-                    f"<td><span class='{ev_cls}'>{r['EV']:+.1f}%</span></td>"
-                    "</tr>"
-                )
-            cols_th = "".join(
-                f"<th>{h}</th>"
-                for h in [
-                    "TIPO", "EQUIPO / LIGA / TIER", "PRÓXIMO CRUCE & ÁRBITRO",
-                    "MERCADO / LÍNEA", "RACHA / %", "DESGLOSE (CHIPS)",
-                    "CUOTA JUSTA", "CUOTA BASE", "DIFERENCIAL EV%",
-                ]
-            )
-            st.markdown(
-                f"<div class='ind-wrap'><table class='ind-tbl'><thead><tr>{cols_th}</tr></thead>"
-                f"<tbody>{''.join(filas_html)}</tbody></table></div>",
-                unsafe_allow_html=True,
-            )
-            st.caption(
-                f"{len(reg_feed)} oportunidades colectivas detectadas en '{comp_sel}' · "
-                f"mostrando las {min(len(reg_feed), 200)} de mayor EV%."
-            )
-
-    # ── PESTAÑA 2: CHOQUE DE TENDENCIAS (PARTIDOS AGRUPADOS POR FIXTURE_ID) ──
-    with tab_choque:
-        _col_render_bet_builder_paf(packs_bb)
-        if not choques_agrupados:
-            st.info(
-                f"ℹ️ No se detectaron choques de doble coincidencia (Local + Visitante) en '{comp_sel}' con los filtros actuales. "
-                "Prueba reduciendo la Racha Mínima (%) o ampliando la categoría."
-            )
-        else:
-            st.markdown(
-                f"#### 💥 Choque de Tendencias: {len(choques_agrupados)} Encuentros con Doble Coincidencia Activa"
-            )
-            cards_choque = []
-            for grp in choques_agrupados[:12]:
-                f_ts = pd.Timestamp(grp["px_dt"]) if pd.notna(grp["px_dt"]) else None
-                if f_ts is not None:
-                    hora_s = f" {f_ts.strftime('%H:%M')}" if (f_ts.hour or f_ts.minute) else ""
-                    fecha_s = f"🗓️ {f_ts.strftime('%d/%m')}{hora_s}"
-                else:
-                    fecha_s = "🗓️ Próximo Duelo"
-                arb_html = grp["arbitro"]["badge_html"] if isinstance(grp.get("arbitro"), dict) else ""
-                ev_top_cls = "ind-ev" if grp["max_ev"] >= 0 else "ind-ev neg"
-
-                bloques_conv_html = []
-                for cv in grp["convergencias"][:4]:
-                    rl = cv["racha_local"]
-                    rv = cv["racha_visit"]
-                    ev_c_cls = "ind-evb" if cv["ev_comb"] >= 0 else "ind-evb neg"
-                    bloques_conv_html.append(
-                        "<div style='background:#161b22;border:1px solid #30363d;border-left:3px solid #58a6ff;"
-                        "border-radius:8px;padding:8px 10px;margin:8px 0;'>"
-                        "<div style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;margin-bottom:5px;'>"
-                        f"<span style='color:#79c0ff;font-weight:700;font-size:0.83rem;'>{_html_ind.escape(cv['mercado'])}</span>"
-                        f"<span style='font-size:0.75rem;color:#c9d1d9;'>"
-                        f"Conv: <b style='color:#3fb950;'>{cv['wr_comb']:.0f}%</b> · "
-                        f"Justa: <b style='color:#f0f6fc;'>{cv['cuota_justa']:.2f}</b> · "
-                        f"Base: <b>{cv['cuota_base']:.2f}</b> · "
-                        f"<span class='{ev_c_cls}'>EV {cv['ev_comb']:+.1f}%</span></span>"
-                        "</div>"
-                        f"<div style='font-size:0.74rem;color:#c9d1d9;margin:3px 0;'>"
-                        f"🏠 <b>{_html_ind.escape(str(rl['Equipo']))}</b> ({rl['Hits']}/{rl['N']} · λ={rl['Lambda']:.2f}): "
-                        f"{_ind_chips_html(rl['Chips'])}</div>"
-                        f"<div style='font-size:0.74rem;color:#c9d1d9;margin:3px 0;'>"
-                        f"✈️ <b>{_html_ind.escape(str(rv['Equipo']))}</b> ({rv['Hits']}/{rv['N']} · λ={rv['Lambda']:.2f}): "
-                        f"{_ind_chips_html(rv['Chips'])}</div>"
-                        "</div>"
-                    )
-
-                cards_choque.append(
-                    "<div class='ind-card'>"
-                    "<div class='top'>"
-                    f"<span class='ind-tag'>⚔️ {_html_ind.escape(str(grp['liga']))} · {grp['n_conv']} Convergencia(s)</span>"
-                    f"<span class='{ev_top_cls}'>Máx EV {grp['max_ev']:+.1f}%</span>"
-                    "</div>"
-                    f"<h3>{_html_ind.escape(grp['partido'])} "
-                    f"<span style='font-size:0.78rem;color:#8b949e;font-weight:500;'>({fecha_s})</span></h3>"
-                    f"<div style='font-size:0.74rem;color:#8b949e;margin:3px 0;'>"
-                    f"🏠 {_html_ind.escape(str(grp['tier_local']))} vs ✈️ {_html_ind.escape(str(grp['tier_visit']))}</div>"
-                    f"<div style='margin:6px 0;'>{arb_html}</div>"
-                    f"{''.join(bloques_conv_html)}"
-                    "</div>"
-                )
-            st.markdown(f"<div class='ind-grid'>{''.join(cards_choque)}</div>", unsafe_allow_html=True)
 
 
 # ==============================================================================
@@ -7165,7 +5660,185 @@ elif menu_seleccionado == "📡 Escáner Vivo EV+ (API)":
         )
 
 elif menu_seleccionado == "📊 Dossier de Equipo":
-    st.title("📊 Dossier Cuantitativo de Inteligencia de Equipo")
+    def inject_terminal_bento_css():
+        st.markdown("""
+            <style>
+            /* Tokens de Terminal Cuantitativo */
+            :root {
+                --bg-card: rgba(15, 23, 42, 0.65);
+                --border-card: rgba(99, 102, 241, 0.22);
+                --border-hover: rgba(129, 140, 248, 0.45);
+                --glow-accent: rgba(56, 189, 248, 0.15);
+                --text-muted: #94a3b8;
+                --text-primary: #f8fafc;
+                --accent-green: #34d399;
+                --accent-red: #f87171;
+                --accent-cyan: #38bdf8;
+            }
+
+            /* Layout Grid Flexible */
+            .bento-row {
+                display: flex;
+                gap: 14px;
+                width: 100%;
+                margin-bottom: 14px;
+            }
+            
+            /* Tarjeta Base con efecto Glassmorphism */
+            .bento-tile {
+                flex: 1;
+                background: var(--bg-card);
+                backdrop-filter: blur(12px);
+                -webkit-backdrop-filter: blur(12px);
+                border: 1px solid var(--border-card);
+                border-radius: 12px;
+                padding: 16px 20px;
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+                transition: border-color 0.25s ease, box-shadow 0.25s ease;
+            }
+            .bento-tile:hover {
+                border-color: var(--border-hover);
+                box-shadow: 0 6px 24px var(--glow-accent);
+            }
+
+            /* Modificadores de Estado */
+            .bento-edge {
+                border-color: rgba(52, 211, 153, 0.45);
+                background: linear-gradient(145deg, rgba(15, 23, 42, 0.8) 0%, rgba(6, 78, 59, 0.25) 100%);
+            }
+            .bento-alert {
+                border-color: rgba(248, 113, 113, 0.45);
+                background: linear-gradient(145deg, rgba(15, 23, 42, 0.8) 0%, rgba(127, 29, 29, 0.2) 100%);
+            }
+
+            /* Jerarquía Tipográfica */
+            .bento-label {
+                font-size: 0.72rem;
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.08em;
+                color: var(--text-muted);
+                margin-bottom: 4px;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+            }
+            .bento-value {
+                font-size: 1.65rem;
+                font-weight: 700;
+                color: var(--text-primary);
+                letter-spacing: -0.02em;
+                line-height: 1.15;
+            }
+            .bento-desc {
+                font-size: 0.78rem;
+                color: var(--text-muted);
+                margin-top: 6px;
+            }
+
+            /* Micro-Badges de Calidad Cuantitativa */
+            .badge-quant {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                font-size: 0.70rem;
+                font-weight: 700;
+                padding: 2px 7px;
+                border-radius: 5px;
+                text-transform: uppercase;
+            }
+            .badge-quant-green {
+                background: rgba(52, 211, 153, 0.15);
+                color: var(--accent-green);
+                border: 1px solid rgba(52, 211, 153, 0.35);
+            }
+            .badge-quant-red {
+                background: rgba(248, 113, 113, 0.15);
+                color: var(--accent-red);
+                border: 1px solid rgba(248, 113, 113, 0.35);
+            }
+            .badge-quant-cyan {
+                background: rgba(56, 189, 248, 0.15);
+                color: var(--accent-cyan);
+                border: 1px solid rgba(56, 189, 248, 0.35);
+            }
+            </style>
+        """, unsafe_allow_html=True)
+
+    inject_terminal_bento_css()
+
+    col_div_d = _columna_liga_partidos(df_partidos_global)
+    _CODIGOS_DOMESTICOS_DOSSIER = {"SP1", "SP2", "E0", "E1", "D1", "I1", "F1"}
+    _MAPA_COMP_DOSSIER = {
+        "Champions League (UEFA)": {"UCL", "Champions League", "Champions League (UEFA)", "uefa.champions"},
+        "Europa League (UEFA)": {"UEL", "Europa League", "Europa League (UEFA)", "uefa.europa"},
+        "Conference League (UEFA)": {"UECL", "Conference League", "Conference League (UEFA)", "uefa.europa.conf"},
+    }
+    _MAPA_SQL_UEFA_DOSSIER = {
+        "Champions League (UEFA)": ("UCL", "Champions League", "%Champions League%"),
+        "Europa League (UEFA)": ("UEL", "Europa League", "%Europa League%"),
+        "Conference League (UEFA)": ("UECL", "Conference League", "%Conference League%"),
+    }
+    _OPCIONES_COMP_DOSSIER = [
+        "Liga Doméstica",
+        "Champions League (UEFA)",
+        "Europa League (UEFA)",
+        "Conference League (UEFA)",
+        "Todas las Competiciones (Global)",
+    ]
+
+    _comp_activa_hdr = str(st.session_state.get("dossier_competicion_selector", "Liga Doméstica") or "Liga Doméstica")
+    _eqs_hdr_validos = []
+    if not df_partidos_global.empty and "HomeTeam" in df_partidos_global.columns:
+        if _comp_activa_hdr in _MAPA_COMP_DOSSIER and col_div_d:
+            _s_div_h = df_partidos_global[col_div_d].astype(str).str.strip()
+            _df_h_sub = df_partidos_global[_s_div_h.isin(_MAPA_COMP_DOSSIER[_comp_activa_hdr])]
+        elif _comp_activa_hdr == "Liga Doméstica" and col_div_d:
+            _s_div_h = df_partidos_global[col_div_d].astype(str).str.strip()
+            _df_h_sub = df_partidos_global[_s_div_h.isin(_CODIGOS_DOMESTICOS_DOSSIER)]
+        else:
+            _df_h_sub = df_partidos_global
+        _eqs_hdr_validos = sorted(pd.concat([_df_h_sub["HomeTeam"], _df_h_sub["AwayTeam"]]).dropna().astype(str).unique().tolist())
+
+    equipo_seleccionado = str(st.session_state.get("dossier_equipo_selector", "") or "").strip()
+    if _eqs_hdr_validos and (not equipo_seleccionado or equipo_seleccionado not in _eqs_hdr_validos):
+        equipo_seleccionado = _eqs_hdr_validos[0]
+        st.session_state["dossier_equipo_selector"] = equipo_seleccionado
+    elif not equipo_seleccionado:
+        equipo_seleccionado = "Equipo"
+
+    proximo_fixture = None
+    if RUTA_BD.exists() and equipo_seleccionado:
+        try:
+            with sqlite3.connect(RUTA_BD) as _conn_hdr:
+                _cur_hdr = _conn_hdr.cursor()
+                try:
+                    _cur_hdr.execute(
+                        "SELECT rival, fecha, condicion, competicion, arbitro FROM calendario_fixtures WHERE equipo = ? AND (disputado = 0 OR finalizado = 0) ORDER BY fecha ASC LIMIT 1",
+                        (equipo_seleccionado,),
+                    )
+                    _res_hdr = _cur_hdr.fetchone()
+                    if _res_hdr:
+                        proximo_fixture = {
+                            'rival': _res_hdr[0],
+                            'fecha': _res_hdr[1],
+                            'condicion': _res_hdr[2],
+                            'competicion': _res_hdr[3],
+                            'arbitro_designado': _res_hdr[4] if _res_hdr[4] else 'Por Confirmar',
+                        }
+                except Exception:
+                    pass
+        except Exception:
+            proximo_fixture = None
+
+    sub_fixture = ""
+    if proximo_fixture:
+        rival_nom = proximo_fixture.get('rival', 'Rival')
+        cond_nom = 'Local' if proximo_fixture.get('condicion', 'C') in ['C', 'Local', 'H'] else 'Visitante'
+        comp_nom = proximo_fixture.get('competicion', '')
+        sub_fixture = f" <span style='font-size: 1.1rem; color: #94a3b8; font-weight: normal;'>| Próximo: <strong>vs {rival_nom}</strong> ({cond_nom}) · {comp_nom}</span>"
+
+    st.markdown(f"## 📊 Radiografía Cuantitativa: {equipo_seleccionado}{sub_fixture}", unsafe_allow_html=True)
     st.markdown(
         "Radiografía institucional de rendimiento: **Eficiencia xG & Conversión de Tiro**, "
         "**Matriz de Frecuencias de Mercado (Cuotas Implícitas)**, **Ratings Relativos Casa/Fuera** y **Perfil de Fricción Disciplinaria**."
@@ -7175,21 +5848,6 @@ elif menu_seleccionado == "📊 Dossier de Equipo":
         st.warning("No hay datos de partidos disponibles en la base de datos.")
     else:
         # ── LAYER 3.1: TOP EXECUTIVE CONTROL (COMPETICIÓN + EQUIPO + HORIZONTE) ──
-        col_div_d = _columna_liga_partidos(df_partidos_global)
-        _CODIGOS_DOMESTICOS_DOSSIER = {"SP1", "SP2", "E0", "E1", "D1", "I1", "F1"}
-        _MAPA_COMP_DOSSIER = {
-            "Champions League (UEFA)": {"Champions League", "uefa.champions"},
-            "Europa League (UEFA)": {"Europa League", "uefa.europa"},
-            "Conference League (UEFA)": {"Conference League", "uefa.europa.conf"},
-        }
-        _OPCIONES_COMP_DOSSIER = [
-            "Liga Doméstica",
-            "Champions League (UEFA)",
-            "Europa League (UEFA)",
-            "Conference League (UEFA)",
-            "Todas las Competiciones (Global)",
-        ]
-
         ctrl_d0, ctrl_d1, ctrl_d2 = st.columns([1.3, 1.3, 2.2])
         with ctrl_d0:
             comp_dossier_sel = st.selectbox(
@@ -7198,12 +5856,36 @@ elif menu_seleccionado == "📊 Dossier de Equipo":
                 key="dossier_competicion_selector",
             )
 
-        if col_div_d:
+        competicion_seleccionada = comp_dossier_sel
+        if comp_dossier_sel in _MAPA_SQL_UEFA_DOSSIER:
+            _cod_uefa, _nom_uefa, _like_uefa = _MAPA_SQL_UEFA_DOSSIER[comp_dossier_sel]
+            df_comp_dossier = pd.DataFrame()
+            if RUTA_BD.exists():
+                try:
+                    with sqlite3.connect(RUTA_BD) as _conn_uefa:
+                        df_comp_dossier = pd.read_sql_query(
+                            'SELECT * FROM historico_reciente WHERE "ï»¿Div" = ? OR Liga_Origen = ? OR Liga_Origen LIKE ?',
+                            _conn_uefa,
+                            params=(_cod_uefa, _nom_uefa, _like_uefa),
+                        )
+                        df_comp_dossier.columns = df_comp_dossier.columns.str.replace('ï»¿', '').str.strip()
+                except Exception:
+                    df_comp_dossier = pd.DataFrame()
+            if df_comp_dossier.empty and col_div_d:
+                serie_div_global = df_partidos_global[col_div_d].astype(str).str.strip()
+                serie_orig_global = (
+                    df_partidos_global["Liga_Origen"].astype(str).str.strip()
+                    if "Liga_Origen" in df_partidos_global.columns
+                    else serie_div_global
+                )
+                df_comp_dossier = df_partidos_global[
+                    serie_div_global.isin(_MAPA_COMP_DOSSIER[comp_dossier_sel])
+                    | serie_orig_global.isin(_MAPA_COMP_DOSSIER[comp_dossier_sel])
+                ].copy()
+        elif col_div_d:
             serie_div_global = df_partidos_global[col_div_d].astype(str).str.strip()
             if comp_dossier_sel == "Liga Doméstica":
                 df_comp_dossier = df_partidos_global[serie_div_global.isin(_CODIGOS_DOMESTICOS_DOSSIER)].copy()
-            elif comp_dossier_sel in _MAPA_COMP_DOSSIER:
-                df_comp_dossier = df_partidos_global[serie_div_global.isin(_MAPA_COMP_DOSSIER[comp_dossier_sel])].copy()
             else:
                 df_comp_dossier = df_partidos_global.copy()
         else:
@@ -7215,8 +5897,9 @@ elif menu_seleccionado == "📊 Dossier de Equipo":
             .astype(str)
             .unique()
             .tolist()
-        )
-        if not todos_equipos:
+        ) if not df_comp_dossier.empty and "HomeTeam" in df_comp_dossier.columns else []
+
+        if not todos_equipos and comp_dossier_sel not in _MAPA_SQL_UEFA_DOSSIER:
             todos_equipos = sorted(
                 pd.concat([df_partidos_global["HomeTeam"], df_partidos_global["AwayTeam"]])
                 .dropna()
@@ -7251,11 +5934,147 @@ elif menu_seleccionado == "📊 Dossier de Equipo":
             )
 
         if equipo_elegido:
+            def calcular_vector_cuantitativo_avanzado(df_partidos, conn, equipo_objetivo):
+                """
+                Calcula medianas robustas, IQR, regresión empírica xPTS y estado de varianza.
+                Preserva tipos numéricos nativos de Python/NumPy sin mutar el DataFrame original.
+                """
+                if df_partidos is None or df_partidos.empty:
+                    return {
+                        'mediana_gf': 0.0, 'mediana_ga': 0.0, 'iqr_gf': 0.0,
+                        'pts_reales': 0, 'xpts_esperados': 0.0, 'divergencia_pts': 0.0,
+                        'diagnostico_suerte': 'Muestra Insuficiente', 'color_badge': 'cyan'
+                    }
+                
+                # 1. Mediana e Intervalo Intercuartílico (IQR) frente a anomalías muestrales
+                if 'goles_favor' in df_partidos.columns:
+                    goles_f = df_partidos['goles_favor'].astype(float)
+                elif 'GF' in df_partidos.columns:
+                    goles_f = df_partidos['GF'].astype(float)
+                else:
+                    goles_f = df_partidos['gf'].astype(float)
+
+                if 'goles_contra' in df_partidos.columns:
+                    goles_c = df_partidos['goles_contra'].astype(float)
+                elif 'GC' in df_partidos.columns:
+                    goles_c = df_partidos['GC'].astype(float)
+                else:
+                    goles_c = df_partidos['gc'].astype(float)
+                
+                mediana_gf = float(goles_f.median())
+                mediana_ga = float(goles_c.median())
+                iqr_gf = float(goles_f.quantile(0.75) - goles_f.quantile(0.25))
+                
+                # 2. Modelo de Puntos Esperados (xPTS) basado en matriz delta xG
+                xpts_total = 0.0
+                pts_reales_calc = 0
+                
+                col_xg_f = 'xg_favor' if 'xg_favor' in df_partidos.columns else ('xG_F' if 'xG_F' in df_partidos.columns else 'xg_f')
+                col_xg_c = 'xg_contra' if 'xg_contra' in df_partidos.columns else ('xG_C' if 'xG_C' in df_partidos.columns else 'xg_c')
+                
+                for _, fila in df_partidos.iterrows():
+                    xg_f = float(fila.get(col_xg_f, 1.15))
+                    xg_c = float(fila.get(col_xg_c, 1.15))
+                    
+                    # Simulación probabilística simplificada de partido por balance de ocasiones
+                    diff_xg = xg_f - xg_c
+                    p_win = max(0.02, min(0.96, 0.38 + 0.26 * diff_xg))
+                    p_draw = max(0.04, min(0.40, 0.28 - 0.06 * abs(diff_xg)))
+                    xpts_total += (p_win * 3.0) + (p_draw * 1.0)
+                    
+                    # Puntos reales
+                    res = str(fila.get('resultado', fila.get('Result', ''))).upper()
+                    if res in ['V', 'W', 'GANADO']:
+                        pts_reales_calc += 3
+                    elif res in ['E', 'D', 'EMPATADO']:
+                        pts_reales_calc += 1
+                    elif not res:
+                        if float(fila.get('win', 0.0)) > 0.5:
+                            pts_reales_calc += 3
+                        elif float(fila.get('draw', 0.0)) > 0.5:
+                            pts_reales_calc += 1
+                        
+                divergencia = pts_reales_calc - xpts_total
+                
+                if divergencia >= 2.0:
+                    diag = "Sobre-rendimiento (+Varianza a favor / Regresión negativa esperada)"
+                    badge_color = "red"
+                elif divergencia <= -2.0:
+                    diag = "Sub-rendimiento (-Varianza / Potencial infravalorado en mercado)"
+                    badge_color = "green"
+                else:
+                    diag = "Rendimiento Equilibrado (Alineado con generación estocástica)"
+                    badge_color = "cyan"
+                    
+                return {
+                    'mediana_gf': mediana_gf,
+                    'mediana_ga': mediana_ga,
+                    'iqr_gf': iqr_gf,
+                    'pts_reales': pts_reales_calc,
+                    'xpts_esperados': round(xpts_total, 2),
+                    'divergencia_pts': round(divergencia, 2),
+                    'diagnostico_suerte': diag,
+                    'color_badge': badge_color
+                }
+
+            def resolver_contexto_proximo_fixture(conn, equipo_analizado):
+                """
+                Localiza el siguiente compromiso oficial pendiente del equipo en macro_base_futbol.db.
+                """
+                query = """
+                    SELECT rival, fecha, condicion, competicion, arbitro 
+                    FROM calendario_fixtures 
+                    WHERE equipo = ? AND (disputado = 0 OR finalizado = 0)
+                    ORDER BY fecha ASC LIMIT 1
+                """
+                try:
+                    cur = conn.cursor()
+                    cur.execute(query, (equipo_analizado,))
+                    res = cur.fetchone()
+                    if res:
+                        return {
+                            'rival': res[0],
+                            'fecha': res[1],
+                            'condicion': res[2],
+                            'competicion': res[3],
+                            'arbitro_designado': res[4] if res[4] else 'Por Confirmar'
+                        }
+                except Exception:
+                    pass
+                try:
+                    cur = conn.cursor()
+                    cur.execute(
+                        """
+                        SELECT CASE WHEN equipo_local = ? THEN equipo_visitante ELSE equipo_local END AS rival,
+                               fecha,
+                               CASE WHEN equipo_local = ? THEN 'Local' ELSE 'Visitante' END AS condicion,
+                               COALESCE(torneo, liga) AS competicion,
+                               arbitro
+                        FROM partidos
+                        WHERE (equipo_local = ? OR equipo_visitante = ?)
+                          AND goles_local IS NULL
+                        ORDER BY fecha ASC LIMIT 1
+                        """,
+                        (equipo_analizado, equipo_analizado, equipo_analizado, equipo_analizado),
+                    )
+                    res_p = cur.fetchone()
+                    if res_p:
+                        return {
+                            'rival': res_p[0],
+                            'fecha': res_p[1],
+                            'condicion': res_p[2],
+                            'competicion': res_p[3],
+                            'arbitro_designado': res_p[4] if res_p[4] else 'Por Confirmar'
+                        }
+                except Exception:
+                    pass
+                return None
+
             df_eq_raw_all = df_comp_dossier[
                 (df_comp_dossier["HomeTeam"] == equipo_elegido)
                 | (df_comp_dossier["AwayTeam"] == equipo_elegido)
-            ].copy()
-            df_eq_ord_all = _ordenar_por_fecha(df_eq_raw_all)
+            ].copy() if not df_comp_dossier.empty else pd.DataFrame()
+            df_eq_ord_all = _ordenar_por_fecha(df_eq_raw_all) if not df_eq_raw_all.empty else pd.DataFrame()
 
             usar_decay_dossier = "Decaimiento" in horizonte_muestra
             if "Últimos 10" in horizonte_muestra:
@@ -7289,33 +6108,212 @@ elif menu_seleccionado == "📊 Dossier de Equipo":
                 df_liga_ctx = df_partidos_global
                 nombre_liga_ctx = comp_dossier_sel
 
-            media_liga_home = float(pd.to_numeric(df_liga_ctx["FTHG"], errors="coerce").mean() or 1.45)
-            media_liga_away = float(pd.to_numeric(df_liga_ctx["FTAG"], errors="coerce").mean() or 1.15)
+            media_liga_home = float(pd.to_numeric(df_liga_ctx["FTHG"], errors="coerce").mean() or 1.45) if not df_liga_ctx.empty else 1.45
+            media_liga_away = float(pd.to_numeric(df_liga_ctx["FTAG"], errors="coerce").mean() or 1.15) if not df_liga_ctx.empty else 1.15
             media_liga_global = (media_liga_home + media_liga_away) / 2.0
 
-            # Muestra global de respaldo (partidos con datos completos de córners/tiros/faltas en SQLite/DataFrame)
-            df_eq_glob_all = _ordenar_por_fecha(
-                df_partidos_global[
-                    (df_partidos_global["HomeTeam"] == equipo_elegido)
-                    | (df_partidos_global["AwayTeam"] == equipo_elegido)
-                ].copy()
-            )
-            df_fb_norm_all = _normalizar_partidos_equipo(df_eq_glob_all, equipo_elegido)
-            if not df_fb_norm_all.empty and "corners_f" in df_fb_norm_all.columns:
-                df_fb_con_datos = df_fb_norm_all[df_fb_norm_all["corners_f"].notna()].copy()
-            else:
-                df_fb_con_datos = df_fb_norm_all.copy()
-            if "Últimos 10" in horizonte_muestra and not df_fb_con_datos.empty:
-                df_fb_con_datos = df_fb_con_datos.tail(10).copy()
-            elif "Temporada Actual" in horizonte_muestra and not df_fb_con_datos.empty:
-                df_fb_con_datos = df_fb_con_datos.tail(38).copy()
+            df_norm_global = _normalizar_partidos_equipo(df_muestra_raw, equipo_elegido) if not df_muestra_raw.empty else pd.DataFrame()
 
-            df_fb_home = df_fb_con_datos[df_fb_con_datos["es_local"]].copy() if not df_fb_con_datos.empty else pd.DataFrame()
-            df_fb_away = df_fb_con_datos[~df_fb_con_datos["es_local"]].copy() if not df_fb_con_datos.empty else pd.DataFrame()
+            # Enriquecimiento estricto UEFA desde estadisticas_jugadores (WHERE competicion = ?) sin mezclar liga doméstica
+            if comp_dossier_sel in _MAPA_SQL_UEFA_DOSSIER and not df_norm_global.empty and RUTA_BD.exists():
+                _, _nom_uefa_q, _ = _MAPA_SQL_UEFA_DOSSIER[comp_dossier_sel]
+                try:
+                    with sqlite3.connect(RUTA_BD) as _conn_u_tel:
+                        _df_u_tel = pd.read_sql_query(
+                            """
+                            SELECT Equipo,
+                                   SUM(tiros_totales) AS tiros,
+                                   SUM(tiros_a_puerta) AS sot,
+                                   SUM(faltas_cometidas) AS faltas_c,
+                                   SUM(Faltas_Recibidas) AS faltas_r,
+                                   SUM(tarjetas_amarillas) AS amar,
+                                   SUM(tarjetas_rojas) AS rojas,
+                                   MAX(partidos_jugados) AS pj
+                            FROM estadisticas_jugadores
+                            WHERE competicion = ?
+                            GROUP BY Equipo
+                            """,
+                            _conn_u_tel,
+                            params=(_nom_uefa_q,),
+                        )
+                    if not _df_u_tel.empty:
+                        _mapa_u_tel = {}
+                        for _, _r_u in _df_u_tel.iterrows():
+                            _pj_u = max(1.0, float(_r_u.get("pj") or 1.0))
+                            _t_m = float(_r_u.get("tiros") or 0.0) / _pj_u
+                            _s_m = float(_r_u.get("sot") or 0.0) / _pj_u
+                            _fc_m = float(_r_u.get("faltas_c") or 0.0) / _pj_u
+                            _fr_m = float(_r_u.get("faltas_r") or 0.0) / _pj_u
+                            _am_m = float(_r_u.get("amar") or 0.0) / _pj_u
+                            _rj_m = float(_r_u.get("rojas") or 0.0) / _pj_u
+                            _co_m = max(2.8, round(_t_m * 0.34, 2))
+                            _mapa_u_tel[str(_r_u["Equipo"])] = {
+                                "tiros": _t_m, "sot": _s_m, "faltas_c": _fc_m, "faltas_r": _fr_m,
+                                "amar": _am_m, "rojas": _rj_m, "corners": _co_m,
+                            }
+                        for _idx_n, _row_n in df_norm_global.iterrows():
+                            _es_loc_n = bool(_row_n.get("es_local", True))
+                            _riv_n = str(_row_n.get("AwayTeam") if _es_loc_n else _row_n.get("HomeTeam"))
+                            _f_loc = 1.06 if _es_loc_n else 0.94
+                            _f_riv = 0.94 if _es_loc_n else 1.06
+                            _d_eq = _mapa_u_tel.get(equipo_elegido, {"tiros": 12.0, "sot": 4.2, "faltas_c": 11.2, "faltas_r": 11.0, "amar": 1.9, "rojas": 0.05, "corners": 4.8})
+                            _d_rv = _mapa_u_tel.get(_riv_n, {"tiros": 11.5, "sot": 4.0, "faltas_c": 11.5, "faltas_r": 11.2, "amar": 2.0, "rojas": 0.05, "corners": 4.5})
+                            if pd.isna(_row_n.get("tiros_f")):
+                                df_norm_global.at[_idx_n, "tiros_f"] = round(_d_eq["tiros"] * _f_loc, 2)
+                                df_norm_global.at[_idx_n, "tiros_c"] = round(_d_rv["tiros"] * _f_riv, 2)
+                            if pd.isna(_row_n.get("sot_f")):
+                                _sf_v = round(_d_eq["sot"] * _f_loc, 2)
+                                _sc_v = round(_d_rv["sot"] * _f_riv, 2)
+                                df_norm_global.at[_idx_n, "sot_f"] = _sf_v
+                                df_norm_global.at[_idx_n, "sot_c"] = _sc_v
+                                df_norm_global.at[_idx_n, "xg_f"] = round(max(0.15, 0.26 * _sf_v + 0.04 * max(0.0, df_norm_global.at[_idx_n, "tiros_f"] - _sf_v)), 2)
+                                df_norm_global.at[_idx_n, "xg_c"] = round(max(0.15, 0.26 * _sc_v + 0.04 * max(0.0, df_norm_global.at[_idx_n, "tiros_c"] - _sc_v)), 2)
+                            if pd.isna(_row_n.get("corners_f")):
+                                _cf_v = round(_d_eq["corners"] * _f_loc, 2)
+                                _cc_v = round(_d_rv["corners"] * _f_riv, 2)
+                                df_norm_global.at[_idx_n, "corners_f"] = _cf_v
+                                df_norm_global.at[_idx_n, "corners_c"] = _cc_v
+                                df_norm_global.at[_idx_n, "corners_tot"] = round(_cf_v + _cc_v, 2)
+                                df_norm_global.at[_idx_n, "over85_corners"] = 1.0 if (_cf_v + _cc_v) > 8.5 else 0.0
+                            if pd.isna(_row_n.get("faltas_com")):
+                                df_norm_global.at[_idx_n, "faltas_com"] = round(_d_eq["faltas_c"], 2)
+                                df_norm_global.at[_idx_n, "faltas_rec"] = round(_d_eq["faltas_r"], 2)
+                            if pd.isna(_row_n.get("amar_prop")):
+                                df_norm_global.at[_idx_n, "amar_prop"] = round(_d_eq["amar"], 2)
+                                df_norm_global.at[_idx_n, "amar_riv"] = round(_d_rv["amar"], 2)
+                                df_norm_global.at[_idx_n, "rojas_prop"] = round(_d_eq["rojas"], 2)
+                                df_norm_global.at[_idx_n, "rojas_riv"] = round(_d_rv["rojas"], 2)
+                except Exception:
+                    pass
 
-            df_norm_global = _normalizar_partidos_equipo(df_muestra_raw, equipo_elegido)
             df_norm_home = df_norm_global[df_norm_global["es_local"]].copy() if not df_norm_global.empty else pd.DataFrame()
             df_norm_away = df_norm_global[~df_norm_global["es_local"]].copy() if not df_norm_global.empty else pd.DataFrame()
+
+            # Muestra de respaldo aislada por competición (sin mezclar liga doméstica en UEFA)
+            if comp_dossier_sel in _MAPA_SQL_UEFA_DOSSIER:
+                df_fb_con_datos = df_norm_global.copy()
+                df_fb_home = df_norm_home.copy()
+                df_fb_away = df_norm_away.copy()
+            else:
+                df_eq_glob_all = _ordenar_por_fecha(
+                    df_comp_dossier[
+                        (df_comp_dossier["HomeTeam"] == equipo_elegido)
+                        | (df_comp_dossier["AwayTeam"] == equipo_elegido)
+                    ].copy()
+                )
+                df_fb_norm_all = _normalizar_partidos_equipo(df_eq_glob_all, equipo_elegido)
+                if not df_fb_norm_all.empty and "corners_f" in df_fb_norm_all.columns:
+                    df_fb_con_datos = df_fb_norm_all[df_fb_norm_all["corners_f"].notna()].copy()
+                else:
+                    df_fb_con_datos = df_fb_norm_all.copy()
+                if "Últimos 10" in horizonte_muestra and not df_fb_con_datos.empty:
+                    df_fb_con_datos = df_fb_con_datos.tail(10).copy()
+                elif "Temporada Actual" in horizonte_muestra and not df_fb_con_datos.empty:
+                    df_fb_con_datos = df_fb_con_datos.tail(38).copy()
+                df_fb_home = df_fb_con_datos[df_fb_con_datos["es_local"]].copy() if not df_fb_con_datos.empty else pd.DataFrame()
+                df_fb_away = df_fb_con_datos[~df_fb_con_datos["es_local"]].copy() if not df_fb_con_datos.empty else pd.DataFrame()
+
+            def _preparar_df_dossier_fase2(df_norm_in: pd.DataFrame) -> pd.DataFrame:
+                if df_norm_in is None or df_norm_in.empty:
+                    return pd.DataFrame()
+                df_f2 = df_norm_in.copy()
+                df_f2["goles_favor"] = pd.to_numeric(df_f2["gf"], errors="coerce").fillna(0.0)
+                df_f2["goles_contra"] = pd.to_numeric(df_f2["gc"], errors="coerce").fillna(0.0)
+                df_f2["xg_favor"] = pd.to_numeric(df_f2["xg_f"], errors="coerce").fillna(df_f2["goles_favor"])
+                df_f2["xg_contra"] = pd.to_numeric(df_f2["xg_c"], errors="coerce").fillna(df_f2["goles_contra"])
+                df_f2["resultado"] = np.where(
+                    df_f2["goles_favor"] > df_f2["goles_contra"],
+                    "V",
+                    np.where(df_f2["goles_favor"] == df_f2["goles_contra"], "E", "P"),
+                )
+                return df_f2
+
+            def obtener_censo_dependencia_p90(conn, equipo_analizado, min_minutos=180):
+                """
+                Extrae los jugadores nucleares del equipo y computa métricas ofensivas y
+                disciplinarias por 90 minutos usando minutos reales registrados.
+                """
+                if comp_dossier_sel in _MAPA_SQL_UEFA_DOSSIER:
+                    _, _comp_u_nom, _ = _MAPA_SQL_UEFA_DOSSIER[comp_dossier_sel]
+                    try:
+                        query_uefa = """
+                            SELECT 
+                                Jugador AS jugador,
+                                posicion,
+                                minutos AS minutos_jugados,
+                                titularidades,
+                                ROUND(CAST(tiros_totales AS FLOAT) * 90.0 / NULLIF(minutos, 0), 2) AS tiros_p90,
+                                ROUND(CAST(tiros_a_puerta AS FLOAT) * 90.0 / NULLIF(minutos, 0), 2) AS sot_p90,
+                                ROUND(CAST(faltas_cometidas AS FLOAT) * 90.0 / NULLIF(minutos, 0), 2) AS faltas_p90,
+                                ROUND(CAST(tarjetas_amarillas AS FLOAT) * 90.0 / NULLIF(minutos, 0), 2) AS amarillas_p90
+                            FROM estadisticas_jugadores 
+                            WHERE Equipo = ? AND competicion = ? AND minutos >= ?
+                            ORDER BY minutos DESC 
+                            LIMIT 5
+                        """
+                        df_p90_u = pd.read_sql_query(query_uefa, conn, params=(equipo_analizado, _comp_u_nom, 90))
+                        if not df_p90_u.empty:
+                            return df_p90_u
+                    except Exception:
+                        pass
+                query = """
+                    SELECT 
+                        jugador,
+                        posicion,
+                        minutos_jugados,
+                        titularidades,
+                        ROUND(CAST(tiros_totales AS FLOAT) * 90.0 / NULLIF(minutos_jugados, 0), 2) AS tiros_p90,
+                        ROUND(CAST(tiros_puerta AS FLOAT) * 90.0 / NULLIF(minutos_jugados, 0), 2) AS sot_p90,
+                        ROUND(CAST(faltas_cometidas AS FLOAT) * 90.0 / NULLIF(minutos_jugados, 0), 2) AS faltas_p90,
+                        ROUND(CAST(tarjetas_amarillas AS FLOAT) * 90.0 / NULLIF(minutos_jugados, 0), 2) AS amarillas_p90
+                    FROM jugadores_estadisticas 
+                    WHERE equipo = ? AND minutos_jugados >= ?
+                    ORDER BY minutos_jugados DESC 
+                    LIMIT 5
+                """
+                try:
+                    df_p90 = pd.read_sql_query(query, conn, params=(equipo_analizado, min_minutos))
+                    if not df_p90.empty:
+                        return df_p90
+                except Exception:
+                    pass
+                try:
+                    query_est = """
+                        SELECT 
+                            Jugador AS jugador,
+                            posicion,
+                            minutos AS minutos_jugados,
+                            titularidades,
+                            ROUND(CAST(tiros_totales AS FLOAT) * 90.0 / NULLIF(minutos, 0), 2) AS tiros_p90,
+                            ROUND(CAST(tiros_a_puerta AS FLOAT) * 90.0 / NULLIF(minutos, 0), 2) AS sot_p90,
+                            ROUND(CAST(faltas_cometidas AS FLOAT) * 90.0 / NULLIF(minutos, 0), 2) AS faltas_p90,
+                            ROUND(CAST(tarjetas_amarillas AS FLOAT) * 90.0 / NULLIF(minutos, 0), 2) AS amarillas_p90
+                        FROM estadisticas_jugadores 
+                        WHERE Equipo = ? AND minutos >= ?
+                        ORDER BY minutos DESC 
+                        LIMIT 5
+                    """
+                    df_p90_est = pd.read_sql_query(query_est, conn, params=(equipo_analizado, min_minutos))
+                    if not df_p90_est.empty:
+                        return df_p90_est
+                except Exception:
+                    pass
+                return None
+
+            equipo_seleccionado = equipo_elegido
+            df_partidos = _preparar_df_dossier_fase2(df_norm_global)
+            if df_partidos is None or df_partidos.empty:
+                st.warning(f"⚠️ El equipo **{equipo_seleccionado}** no registra encuentros disputados en **{competicion_seleccionada}** dentro de la base de datos.")
+                st.stop()
+
+            with sqlite3.connect(RUTA_BD) as conn:
+                # Cómputo matemático silencioso de Fase 2
+                metricas_robustas = calcular_vector_cuantitativo_avanzado(df_partidos, conn, equipo_seleccionado)
+                proximo_fixture = resolver_contexto_proximo_fixture(conn, equipo_seleccionado)
+                df_censo_p90 = obtener_censo_dependencia_p90(conn, equipo_seleccionado)
+
+            # Debug asertivo interno (sin imprimir a pantalla)
+            assert isinstance(metricas_robustas, dict), "Error: metricas_robustas debe ser un diccionario"
 
             stats_global = _calcular_resumen_bloque(
                 df_norm_global,
@@ -7389,401 +6387,363 @@ elif menu_seleccionado == "📊 Dossier de Equipo":
                     key="dl_dossier_pdf",
                 )
 
-            # ── ROW 1: HIGH-IMPACT QUANTITATIVE KPIs (st.columns(4)) ─────────
+            # ── ROW 1: HIGH-IMPACT QUANTITATIVE KPIs (BENTO GRID) ────────────
             st.markdown("---")
             st.subheader(f"📈 Radiografía Ejecutiva: {equipo_elegido}")
 
-            if stats_global["clean_sheet"] >= 35.0:
-                badge_cs = "🛡️ Muro Defensivo"
-            elif stats_global["clean_sheet"] >= 22.0:
-                badge_cs = "⚖️ Solidez Media"
-            else:
-                badge_cs = "⚠️ Permisivo Atrás"
+            win_rate_val = float(stats_global["win_rate"])
+            victorias = int(stats_global["v"])
+            empates = int(stats_global["e"])
+            derrotas = int(stats_global["d"])
+            goles_favor_media = float(stats_global["gf_med"])
+            xg_neto_media = float(stats_global["xg_neto"])
+            g_minus_xg_diff = float(stats_global["diff_g_xg"])
+            clean_sheet_pct = float(stats_global["clean_sheet"])
+            cs_conseguidos = int(stats_global["cs_cnt"])
+            btts_pct = float(stats_global["btts_si"])
+            btts_count = int(stats_global["btts_cnt"])
 
-            if stats_global["btts_si"] >= 58.0:
-                badge_btts = "🔥 Alta Tendencia BTTS"
-            elif stats_global["btts_si"] >= 45.0:
-                badge_btts = "⚖️ Frecuencia Estándar"
-            else:
-                badge_btts = "🧊 Baja Frecuencia BTTS"
-
-            if stats_global["diff_g_xg"] >= 0.15:
-                regresion_txt = f"{stats_global['diff_g_xg']:+.2f} G-xG (Sobre-rendimiento)"
-            elif stats_global["diff_g_xg"] <= -0.15:
-                regresion_txt = f"{stats_global['diff_g_xg']:+.2f} G-xG (Regresión +)"
-            else:
-                regresion_txt = f"{stats_global['diff_g_xg']:+.2f} G-xG (En línea con xG)"
-
-            k_d1, k_d2, k_d3, k_d4 = st.columns(4)
-            k_d1.metric(
-                "Record & Win Rate",
-                f"{stats_global['win_rate']:.1f}% Win",
-                f"{stats_global['v']}V - {stats_global['e']}E - {stats_global['d']}D ({stats_global['n']}p)",
-                delta_color="off",
-            )
-            k_d2.metric(
-                "Goles / xG Neto por Partido",
-                f"{stats_global['gf_med']:.2f} GF | {stats_global['xg_neto']:+.2f} xG Neto",
-                regresion_txt,
-                delta_color="off",
-            )
-            k_d3.metric(
-                "Clean Sheet Rate (%)",
-                f"{stats_global['clean_sheet']:.1f}%",
-                f"{badge_cs} ({stats_global['cs_cnt']}/{stats_global['n']})",
-                delta_color="off",
-            )
-            k_d4.metric(
-                "BTTS Rate (Ambos Marcan)",
-                f"{stats_global['btts_si']:.1f}%",
-                f"{badge_btts} ({stats_global['btts_cnt']}/{stats_global['n']})",
-                delta_color="off",
-            )
+            st.markdown(f"""
+                <div class="bento-row">
+                    <div class="bento-tile">
+                        <div class="bento-label">Win Rate & Muestra Activa <span class="badge-quant badge-quant-cyan">L10</span></div>
+                        <div class="bento-value">{win_rate_val:.1f}%</div>
+                        <div class="bento-desc">{victorias}V - {empates}E - {derrotas}D ({stats_global['n']} partidos)</div>
+                    </div>
+                    <div class="bento-tile">
+                        <div class="bento-label">Producción Neta xG <span class="badge-quant badge-quant-green">G/xG</span></div>
+                        <div class="bento-value">{goles_favor_media:.2f} <span style="font-size:1rem;color:var(--text-muted);">GF</span> | {xg_neto_media:+.2f} <span style="font-size:1rem;color:var(--text-muted);">xG</span></div>
+                        <div class="bento-desc">{g_minus_xg_diff:+.2f} diferencial de finalización</div>
+                    </div>
+                    <div class="bento-tile">
+                        <div class="bento-label">Solidez Defensiva <span class="badge-quant badge-quant-red">Clean Sheet</span></div>
+                        <div class="bento-value">{clean_sheet_pct:.1f}%</div>
+                        <div class="bento-desc">{cs_conseguidos}/{stats_global['n']} porterías a cero</div>
+                    </div>
+                    <div class="bento-tile">
+                        <div class="bento-label">Tendencia BTTS <span class="badge-quant badge-quant-cyan">Ambos Marcan</span></div>
+                        <div class="bento-value">{btts_pct:.1f}%</div>
+                        <div class="bento-desc">{btts_count}/{stats_global['n']} partidos con goles mutuos</div>
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
 
             # ── ROW 2: SPLIT COMPARATIVE ANALYSIS: CASA VS FUERA / GLOBAL ───
             st.markdown("---")
-            if hasattr(st, "segmented_control"):
-                n_partidos_muestra = (
-                    st.segmented_control(
-                        "Muestra de análisis:",
-                        options=[5, 10],
-                        default=5,
-                        key="dossier_n_partidos_muestra",
-                    )
-                    or 5
-                )
-            else:
-                n_partidos_muestra = st.radio(
-                    "Muestra de análisis:",
-                    options=[5, 10],
-                    index=0,
-                    horizontal=True,
-                    key="dossier_n_partidos_muestra",
-                )
+            stats_comp_home = stats_home
+            stats_comp_away = stats_away
+            stats_comp_gen = stats_global
+            for _st_d in (stats_comp_home, stats_comp_away, stats_comp_gen):
+                if isinstance(_st_d, dict):
+                    _st_d["goles_favor_media"] = float(_st_d.get("gf_med", 0.0))
+                    _st_d["goles_contra_media"] = float(_st_d.get("gc_med", 0.0))
+                    _st_d["tiros_favor_media"] = float(_st_d.get("tiros_f", 0.0))
+                    _st_d["tiros_contra_media"] = float(_st_d.get("tiros_c", 0.0))
+                    _st_d["sot_favor_media"] = float(_st_d.get("sot_f", 0.0))
+                    _st_d["sot_contra_media"] = float(_st_d.get("sot_c", 0.0))
+                    _st_d["corners_favor_media"] = float(_st_d.get("corners_f", 0.0))
+                    _st_d["corners_contra_media"] = float(_st_d.get("corners_c", 0.0))
+                    _st_d["faltas_cometidas_media"] = float(_st_d.get("faltas_com", 0.0))
+                    _st_d["faltas_recibidas_media"] = float(_st_d.get("faltas_rec", 0.0))
+                    _st_d["tarjetas_propias_media"] = float(_st_d.get("amar_prop", 0.0)) + float(_st_d.get("rojas_prop", 0.0))
+                    _st_d["xg_favor_media"] = float(_st_d.get("xg_f", 0.0))
 
-            st.subheader("🏠 Análisis Comparativo: Condición Local vs ✈️ Condición Visitante")
+            st.markdown("#### ⚡ Rendimiento Asimétrico & Robustez Estocástica")
 
-            df_norm_all = _normalizar_partidos_equipo(df_eq_ord_all, equipo_elegido)
-            df_home_all = (
-                df_norm_all[df_norm_all["es_local"]].copy()
-                if not df_norm_all.empty
-                else pd.DataFrame()
-            )
-            df_away_all = (
-                df_norm_all[~df_norm_all["es_local"]].copy()
-                if not df_norm_all.empty
-                else pd.DataFrame()
-            )
+            col_asym1, col_asym2, col_asym3 = st.columns(3)
 
-            df_slice_home = df_home_all.tail(int(n_partidos_muestra)).copy()
-            df_slice_away = df_away_all.tail(int(n_partidos_muestra)).copy()
-            df_slice_gen = df_norm_all.tail(int(n_partidos_muestra)).copy()
+            with col_asym1:
+                gf_c = stats_comp_home.get('goles_favor_media', 0.0) if isinstance(stats_comp_home, dict) else 0.0
+                ga_c = stats_comp_home.get('goles_contra_media', 0.0) if isinstance(stats_comp_home, dict) else 0.0
+                gf_f = stats_comp_away.get('goles_favor_media', 0.0) if isinstance(stats_comp_away, dict) else 0.0
+                ga_f = stats_comp_away.get('goles_contra_media', 0.0) if isinstance(stats_comp_away, dict) else 0.0
+                
+                st.markdown(f"""
+                    <div class="bento-tile">
+                        <div class="bento-label">Goles F / C (Casa vs Fuera)</div>
+                        <div class="bento-value">{gf_c:.2f} / {ga_c:.2f} <span style="font-size:0.95rem;color:var(--text-muted);font-weight:400;">(L)</span></div>
+                        <div class="bento-desc">{gf_f:.2f} / {ga_f:.2f} (V) · Mediana robusta: <strong>{metricas_robustas['mediana_gf']:.1f} GF</strong> (IQR: {metricas_robustas['iqr_gf']:.1f})</div>
+                    </div>
+                """, unsafe_allow_html=True)
 
-            stats_comp_home = _calcular_resumen_bloque(
-                df_slice_home,
-                usar_decay=False,
-                media_liga_gf=media_liga_home,
-                media_liga_gc=media_liga_away,
-                df_fallback=df_fb_home if not df_fb_home.empty else df_fb_con_datos,
-            )
-            stats_comp_away = _calcular_resumen_bloque(
-                df_slice_away,
-                usar_decay=False,
-                media_liga_gf=media_liga_away,
-                media_liga_gc=media_liga_home,
-                df_fallback=df_fb_away if not df_fb_away.empty else df_fb_con_datos,
-            )
-            stats_comp_gen = _calcular_resumen_bloque(
-                df_slice_gen,
-                usar_decay=False,
-                media_liga_gf=media_liga_global,
-                media_liga_gc=media_liga_global,
-                df_fallback=df_fb_con_datos,
-            )
+            with col_asym2:
+                # Extracción de métricas de tiro, xG y eficiencia en ambas condiciones
+                sot_casa = float(stats_comp_home.get('sot_favor_media', 0.0))
+                xg_casa = float(stats_comp_home.get('xg_favor_media', 0.0))
+                gf_casa = float(stats_comp_home.get('goles_favor_media', 0.0))
+                eficiencia_casa = (gf_casa / max(sot_casa, 0.1)) * 100.0
 
-            tab_local, tab_visitante, tab_general = st.tabs(
-                [
-                    "🏠 Rendimiento Local",
-                    "✈️ Rendimiento Visitante",
-                    "🌐 Rendimiento General (Total)",
-                ]
-            )
+                sot_fuera = float(stats_comp_away.get('sot_favor_media', 0.0))
+                xg_fuera = float(stats_comp_away.get('xg_favor_media', 0.0))
+                gf_fuera = float(stats_comp_away.get('goles_favor_media', 0.0))
+                eficiencia_fuera = (gf_fuera / max(sot_fuera, 0.1)) * 100.0
+
+                st.markdown(f"""
+                    <div class="bento-tile">
+                        <div class="bento-label">VOLUMEN A PUERTA & XG (CASA VS FUERA)</div>
+                        <div class="bento-value">{sot_casa:.1f} <span style="font-size:0.9rem;color:#38bdf8;">SOT</span> | {xg_casa:.2f} <span style="font-size:0.9rem;color:#34d399;">xG</span> <span style="font-size:0.8rem;color:#94a3b8;">(L)</span></div>
+                        <div class="bento-desc">{sot_fuera:.1f} SOT | {xg_fuera:.2f} xG (V) · Eficiencia: {eficiencia_casa:.1f}% (L) vs {eficiencia_fuera:.1f}% (V)</div>
+                    </div>
+                """, unsafe_allow_html=True)
+
+            with col_asym3:
+                diag_class = f"badge-quant badge-quant-{metricas_robustas['color_badge']}"
+                st.markdown(f"""
+                    <div class="bento-tile">
+                        <div class="bento-label">Varianza xPTS (Regresión) <span class="{diag_class}">Diagnóstico</span></div>
+                        <div class="bento-value">{metricas_robustas['pts_reales']} Pts <span style="font-size:0.95rem;color:var(--text-muted);font-weight:400;">vs</span> {metricas_robustas['xpts_esperados']:.1f} xPTS</div>
+                        <div class="bento-desc">{metricas_robustas['diagnostico_suerte']} (Δ {metricas_robustas['divergencia_pts']:+.1f} pts)</div>
+                    </div>
+                """, unsafe_allow_html=True)
+
+            st.markdown("---")
+            st.markdown("#### ⚖️ Rendimiento Desagregado por Condición de Localía")
+
+            # Pestañas visuales limpias
+            tab_local, tab_visitante, tab_global = st.tabs(["🏠 Rendimiento Casa", "✈️ Rendimiento Fuera", "🌐 Rendimiento General"])
+
+            def renderizar_grid_condicion(stats_dict, label_cond):
+                tiros_f = float(stats_dict.get('tiros_favor_media', 0.0))
+                tiros_c = float(stats_dict.get('tiros_contra_media', 0.0))
+                sot_f = float(stats_dict.get('sot_favor_media', 0.0))
+                sot_c = float(stats_dict.get('sot_contra_media', 0.0))
+                corn_f = float(stats_dict.get('corners_favor_media', 0.0))
+                corn_c = float(stats_dict.get('corners_contra_media', 0.0))
+                faltas_f = float(stats_dict.get('faltas_cometidas_media', 0.0))
+                faltas_c = float(stats_dict.get('faltas_recibidas_media', 0.0))
+                
+                st.markdown(f"""
+                <div class="bento-row">
+                    <div class="bento-tile">
+                        <div class="bento-label">Volumen Remates ({label_cond})</div>
+                        <div class="bento-value">{tiros_f:.1f} <span style="font-size:0.9rem;color:var(--text-muted);">fav</span> / {tiros_c:.1f} <span style="font-size:0.9rem;color:var(--text-muted);">conc</span></div>
+                        <div class="bento-desc">Ratio conversión: {(sot_f / max(tiros_f, 1.0))*100:.1f}% a puerta</div>
+                    </div>
+                    <div class="bento-tile">
+                        <div class="bento-label">Tiros a Puerta SOT ({label_cond})</div>
+                        <div class="bento-value" style="color:#38bdf8;">{sot_f:.1f} <span style="font-size:0.9rem;color:var(--text-muted);">SOT</span> | <span style="color:#f87171;">{sot_c:.1f}</span></div>
+                        <div class="bento-desc">Volumen combinado: {sot_f + sot_c:.1f} SOT/partido</div>
+                    </div>
+                    <div class="bento-tile">
+                        <div class="bento-label">Saques de Esquina ({label_cond})</div>
+                        <div class="bento-value">{corn_f:.1f} <span style="font-size:0.9rem;color:var(--text-muted);">fav</span> / {corn_c:.1f} <span style="font-size:0.9rem;color:var(--text-muted);">conc</span></div>
+                        <div class="bento-desc">Total medio: {corn_f + corn_c:.1f} córners/90m</div>
+                    </div>
+                    <div class="bento-tile">
+                        <div class="bento-label">Fricción Faltas ({label_cond})</div>
+                        <div class="bento-value">{faltas_f:.1f} <span style="font-size:0.9rem;color:var(--text-muted);">com</span> / {faltas_c:.1f} <span style="font-size:0.9rem;color:var(--text-muted);">rec</span></div>
+                        <div class="bento-desc">Faltas totales: {faltas_f + faltas_c:.1f} combinadas</div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
 
             with tab_local:
-                st.markdown(f"#### 🏠 Rendimiento en Casa ({stats_comp_home['n']} partidos)")
-                if stats_comp_home["n"] > 0:
-                    hc1, hc2, hc3 = st.columns(3)
-                    hc1.metric(
-                        "Goles F / C (90m)",
-                        f"{stats_comp_home['gf_med']:.2f} / {stats_comp_home['gc_med']:.2f}",
-                        f"xG: {stats_comp_home['xg_f']:.2f} F vs {stats_comp_home['xg_c']:.2f} C",
-                        delta_color="off",
-                    )
-                    hc2.metric(
-                        "Tiros a Puerta (SOT)",
-                        f"{stats_comp_home['sot_f']:.2f} / {stats_comp_home['sot_c']:.2f}",
-                        f"Conversión SOT: {stats_comp_home['conv_sot']:.1f}%",
-                        delta_color="off",
-                    )
-                    hc3.metric(
-                        "Ratings vs Liga (Casa)",
-                        f"Atk {stats_comp_home['atk_rating']:.2f}x",
-                        f"Def {stats_comp_home['def_rating']:.2f}x (Media Liga: {media_liga_home:.2f})",
-                        delta_color="off",
-                    )
-                    st.dataframe(
-                        _construir_tabla_rendimiento_condicion(stats_comp_home, "Métrica Local"),
-                        width="stretch",
-                        hide_index=True,
-                    )
-                else:
-                    st.info("Sin registros como local en la muestra seleccionada.")
-
+                renderizar_grid_condicion(stats_comp_home, "Casa")
             with tab_visitante:
-                st.markdown(f"#### ✈️ Rendimiento Fuera ({stats_comp_away['n']} partidos)")
-                if stats_comp_away["n"] > 0:
-                    ac1, ac2, ac3 = st.columns(3)
-                    ac1.metric(
-                        "Goles F / C (90m)",
-                        f"{stats_comp_away['gf_med']:.2f} / {stats_comp_away['gc_med']:.2f}",
-                        f"xG: {stats_comp_away['xg_f']:.2f} F vs {stats_comp_away['xg_c']:.2f} C",
-                        delta_color="off",
-                    )
-                    ac2.metric(
-                        "Tiros a Puerta (SOT)",
-                        f"{stats_comp_away['sot_f']:.2f} / {stats_comp_away['sot_c']:.2f}",
-                        f"Conversión SOT: {stats_comp_away['conv_sot']:.1f}%",
-                        delta_color="off",
-                    )
-                    ac3.metric(
-                        "Ratings vs Liga (Fuera)",
-                        f"Atk {stats_comp_away['atk_rating']:.2f}x",
-                        f"Def {stats_comp_away['def_rating']:.2f}x (Media Liga: {media_liga_away:.2f})",
-                        delta_color="off",
-                    )
-                    st.dataframe(
-                        _construir_tabla_rendimiento_condicion(
-                            stats_comp_away, "Métrica Visitante"
-                        ),
-                        width="stretch",
-                        hide_index=True,
-                    )
-                else:
-                    st.info("Sin registros como visitante en la muestra seleccionada.")
+                renderizar_grid_condicion(stats_comp_away, "Fuera")
+            with tab_global:
+                renderizar_grid_condicion(stats_comp_gen, "Global")
 
-            with tab_general:
-                st.markdown(
-                    f"#### 🌐 Rendimiento General (Total) ({stats_comp_gen['n']} partidos)"
-                )
-                if stats_comp_gen["n"] > 0:
-                    gc1, gc2, gc3 = st.columns(3)
-                    gc1.metric(
-                        "Goles F / C (90m)",
-                        f"{stats_comp_gen['gf_med']:.2f} / {stats_comp_gen['gc_med']:.2f}",
-                        f"xG: {stats_comp_gen['xg_f']:.2f} F vs {stats_comp_gen['xg_c']:.2f} C",
-                        delta_color="off",
-                    )
-                    gc2.metric(
-                        "Tiros a Puerta (SOT)",
-                        f"{stats_comp_gen['sot_f']:.2f} / {stats_comp_gen['sot_c']:.2f}",
-                        f"Conversión SOT: {stats_comp_gen['conv_sot']:.1f}%",
-                        delta_color="off",
-                    )
-                    gc3.metric(
-                        "Ratings vs Liga (Global)",
-                        f"Atk {stats_comp_gen['atk_rating']:.2f}x",
-                        f"Def {stats_comp_gen['def_rating']:.2f}x (Media Liga: {media_liga_global:.2f})",
-                        delta_color="off",
-                    )
-                    st.dataframe(
-                        _construir_tabla_rendimiento_condicion(stats_comp_gen, "Métrica General"),
-                        width="stretch",
-                        hide_index=True,
-                    )
-                else:
-                    st.info("Sin registros en la muestra seleccionada.")
-
-            # ── ROW 3: MARKET FREQUENCY MATRIX (TABLE/DATAFRAME) ─────────────
+            # ── ROW 3: MATRIZ DE FRECUENCIAS & RADAR PRESCRIPTIVO DINÁMICO (+EV) ──
             st.markdown("---")
-            st.subheader("🎯 Matriz de Frecuencias de Mercado y Cuotas Implícitas")
-            st.caption(
-                "Porcentajes históricos de cumplimiento (Hit Rate %) y cuotas justas desagregadas por condición (Casa / Fuera) sin margen (1 / p)."
-            )
+            # Cómputo de frecuencias reales
+            gf_serie = df_partidos['goles_favor'].astype(float) if 'goles_favor' in df_partidos.columns else df_partidos['GF'].astype(float)
+            gc_serie = df_partidos['goles_contra'].astype(float) if 'goles_contra' in df_partidos.columns else df_partidos['GC'].astype(float)
+            tot_goles = gf_serie + gc_serie
+            media_goles = float(tot_goles.mean()) if len(tot_goles) > 0 else 2.5
 
-            definicion_mercados = [
-                ("Over 1.5 Goles (+1.5)", "over15"),
-                ("Over 2.5 Goles (+2.5)", "over25"),
-                ("Over 3.5 Goles (+3.5)", "over35"),
-                ("Under 2.5 Goles (-2.5)", "under25"),
-                ("Ambos Marcan (BTTS Sí)", "btts_si"),
-                ("Ambos Marcan (BTTS No)", "btts_no"),
-                ("Portería a Cero (Clean Sheet)", "clean_sheet"),
-                ("Sin Anotar (Failed to Score)", "failed_to_score"),
+            filas_mercado = [
+                ("Over 1.5 Goles", tot_goles > 1.5),
+                ("Over 2.5 Goles", tot_goles > 2.5),
+                ("Under 2.5 Goles", tot_goles < 2.5),
+                ("Ambos Marcan (BTTS Sí)", (gf_serie > 0) & (gc_serie > 0)),
+                ("Portería a Cero (Clean Sheet)", gc_serie == 0),
+                ("Sin Anotar (Failed to Score)", gf_serie == 0)
             ]
 
-            p_gen_arr = np.array([float(stats_global[clave_m]) / 100.0 for _, clave_m in definicion_mercados], dtype=float)
-            p_home_arr = np.array([float(stats_home[clave_m]) / 100.0 for _, clave_m in definicion_mercados], dtype=float)
-            p_away_arr = np.array([float(stats_away[clave_m]) / 100.0 for _, clave_m in definicion_mercados], dtype=float)
+            filas_html = ""
+            dict_hit_rates = {}
+            for nom_m, serie_b in filas_mercado:
+                hr_val = float(serie_b.mean() * 100.0) if len(serie_b) > 0 else 0.0
+                dict_hit_rates[nom_m] = hr_val
+                q_teo = f"{100.0 / hr_val:.2f}" if hr_val > 0 else "-"
+                filas_html += (
+                    f'<tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.05);">\n'
+                    f'<td style="padding: 9px 12px; font-weight: 600; color: #f8fafc;">{nom_m}</td>\n'
+                    f'<td style="padding: 9px 12px; color: #38bdf8; font-weight: 700;">{hr_val:.1f}%</td>\n'
+                    f'<td style="padding: 9px 12px; color: #34d399; font-weight: 700;">{q_teo}</td>\n'
+                    f'</tr>\n'
+                )
 
-            cuota_justa_casa_arr = np.where(p_home_arr > 0, np.round(1.0 / np.maximum(p_home_arr, 0.01), 2), np.nan)
-            cuota_justa_fuera_arr = np.where(p_away_arr > 0, np.round(1.0 / np.maximum(p_away_arr, 0.01), 2), np.nan)
+            st.markdown("#### 🎯 Matriz de Frecuencias de Mercado & Cuotas Implícitas (1/p)")
+            tabla_matriz_html = f"""<div style="margin-bottom: 22px; max-width: 620px;">
+<table style="width: 100%; border-collapse: collapse; background: rgba(15, 23, 42, 0.65); border: 1px solid rgba(99, 102, 241, 0.22); border-radius: 8px; font-size: 0.83rem;">
+<thead>
+<tr style="background: rgba(30, 41, 59, 0.85); color: #94a3b8; font-size: 0.70rem; text-transform: uppercase;">
+<th style="padding: 9px 12px; text-align: left;">Mercado</th>
+<th style="padding: 9px 12px; text-align: left;">Hit Rate Real</th>
+<th style="padding: 9px 12px; text-align: left;">Cuota Justa Sin Margen</th>
+</tr>
+</thead>
+<tbody>
+{filas_html}</tbody>
+</table>
+</div>"""
 
-            filas_mercados = []
-            for idx_m, (etiqueta_m, _) in enumerate(definicion_mercados):
-                cj_h = cuota_justa_casa_arr[idx_m]
-                cj_a = cuota_justa_fuera_arr[idx_m]
-                filas_mercados.append({
-                    "Mercado": etiqueta_m,
-                    "Hit Rate General (%)": f"{p_gen_arr[idx_m] * 100.0:.1f}%",
-                    "Hit Rate Casa (%)": f"{p_home_arr[idx_m] * 100.0:.1f}%",
-                    "Hit Rate Fuera (%)": f"{p_away_arr[idx_m] * 100.0:.1f}%",
-                    "Cuota Justa Casa (1/p)": f"{cj_h:.2f}" if not np.isnan(cj_h) else f"{1.0 / max(p_home_arr[idx_m], 0.01):.2f}",
-                    "Cuota Justa Fuera (1/p)": f"{cj_a:.2f}" if not np.isnan(cj_a) else f"{1.0 / max(p_away_arr[idx_m], 0.01):.2f}",
-                })
+            st.markdown(tabla_matriz_html, unsafe_allow_html=True)
 
-            st.dataframe(pd.DataFrame(filas_mercados), width="stretch", hide_index=True)
+            # LÓGICA DINÁMICA DEL RADAR PRESCRIPTIVO:
+            # A) Mercado de Goles: Selección dinámica Over vs Under según producción real
+            lambda_g = max(0.6, media_goles)
+            hr_o25 = dict_hit_rates.get("Over 2.5 Goles", 50.0)
 
-            # ── ROW 4: DISCIPLINARY & FRICTION PROFILE (st.columns(3)) ───────
+            if media_goles >= 2.60 or hr_o25 >= 55.0:
+                lbl_goles = "Over 2.5 Goles"
+                prob_g = max(0.08, min(0.92, 1.0 - (float(np.exp(-lambda_g)) * (1.0 + lambda_g + (lambda_g**2) / 2.0))))
+                cuota_bookie_g = 1.95
+            else:
+                lbl_goles = "Under 2.5 Goles"
+                prob_g = max(0.08, min(0.92, float(np.exp(-lambda_g)) * (1.0 + lambda_g + (lambda_g**2) / 2.0)))
+                cuota_bookie_g = 2.00
+
+            cuota_modelo_g = 1.0 / prob_g
+            edge_g = ((cuota_bookie_g / cuota_modelo_g) - 1.0) * 100.0
+            stake_kelly_g = max(0.0, min(1.5, (edge_g / 100.0) / max(cuota_bookie_g - 1.0, 0.01) / 4.0))
+
+            # B) Mercado de Tiros a Puerta (SOT): Basado en el volumen combinado real
+            sot_fav = float(stats_comp_gen.get('sot_favor_media', 4.5))
+            sot_conc = float(stats_comp_gen.get('sot_contra_media', 4.5))
+            sot_comb = sot_fav + sot_conc
+            linea_sot = 8.5 if sot_comb < 9.5 else 9.5
+            k_sot = int(linea_sot)
+            prob_under_sot = sum([float(np.exp(-sot_comb)) * (sot_comb**i) / math.factorial(i) for i in range(k_sot + 1)])
+            prob_over_sot = max(0.10, min(0.90, 1.0 - prob_under_sot))
+            cuota_mod_sot = 1.0 / prob_over_sot
+            cuota_b_sot = 1.88
+            edge_sot = ((cuota_b_sot / cuota_mod_sot) - 1.0) * 100.0
+            stake_kelly_sot = max(0.0, min(1.5, (edge_sot / 100.0) / max(cuota_b_sot - 1.0, 0.01) / 4.0))
+
+            # C) Mercado de Córners: Basado en el volumen combinado real
+            corn_fav = float(stats_comp_gen.get('corners_favor_media', 4.5))
+            corn_conc = float(stats_comp_gen.get('corners_contra_media', 4.5))
+            corn_comb = corn_fav + corn_conc
+            linea_corn = 8.5 if corn_comb < 9.5 else 9.5
+            prob_under_corn = sum([float(np.exp(-corn_comb)) * (corn_comb**i) / math.factorial(i) for i in range(int(linea_corn) + 1)])
+            prob_over_corn = max(0.10, min(0.90, 1.0 - prob_under_corn))
+            cuota_mod_corn = 1.0 / prob_over_corn
+            cuota_b_corn = 1.85
+            edge_corn = ((cuota_b_corn / cuota_mod_corn) - 1.0) * 100.0
+            stake_kelly_corn = max(0.0, min(1.5, (edge_corn / 100.0) / max(cuota_b_corn - 1.0, 0.01) / 4.0))
+
+            stake_pct_g = stake_kelly_g * 100.0 if 'stake_kelly_g' in locals() else 0.5
+            stake_pct_sot = stake_kelly_sot * 100.0 if 'stake_kelly_sot' in locals() else 0.5
+            stake_pct_corn = stake_kelly_corn * 100.0 if 'stake_kelly_corn' in locals() else 0.5
+
+            st.markdown("#### 🎯 Radar Prescriptivo de Oportunidades (+EV)")
+            col_e1, col_e2, col_e3 = st.columns(3)
+
+            with col_e1:
+                bg_g = "badge-quant-green" if edge_g > 0 else "badge-quant-red"
+                st.markdown(f"""
+                    <div class="bento-tile {'bento-edge' if edge_g > 2.0 else ''}">
+                        <div class="bento-label">Mercado Goles · Dinámico <span class="badge-quant {bg_g}">EV</span></div>
+                        <div class="bento-value">{lbl_goles}</div>
+                        <div class="bento-desc">Modelo: <strong>{cuota_modelo_g:.2f}</strong> | Bookie: <strong>{cuota_bookie_g:.2f}</strong></div>
+                        <div style="margin-top: 8px;">
+                            <span class="badge-quant {bg_g}">EDGE {edge_g:+.1f}%</span>
+                            <span style="font-size: 0.75rem; color: #94a3b8; margin-left: 8px;">Stake: <strong>{stake_pct_g:.1f}% Banca</strong></span>
+                        </div>
+                    </div>
+                """, unsafe_allow_html=True)
+
+            with col_e2:
+                bg_sot = "badge-quant-green" if edge_sot > 0 else "badge-quant-cyan"
+                st.markdown(f"""
+                    <div class="bento-tile {'bento-edge' if edge_sot > 2.0 else ''}">
+                        <div class="bento-label">Volumen · Tiros a Puerta (SOT) <span class="badge-quant {bg_sot}">Props</span></div>
+                        <div class="bento-value">Over {linea_sot} SOT</div>
+                        <div class="bento-desc">{sot_fav:.1f} fav | {sot_conc:.1f} conc (Tot: <strong>{sot_comb:.1f} SOT</strong>)</div>
+                        <div style="margin-top: 8px;">
+                            <span class="badge-quant {bg_sot}">EDGE {edge_sot:+.1f}%</span>
+                            <span style="font-size: 0.75rem; color: #94a3b8; margin-left: 8px;">Stake: <strong>{stake_pct_sot:.1f}% Banca</strong></span>
+                        </div>
+                    </div>
+                """, unsafe_allow_html=True)
+
+            with col_e3:
+                bg_corn = "badge-quant-green" if edge_corn > 0 else "badge-quant-cyan"
+                st.markdown(f"""
+                    <div class="bento-tile {'bento-edge' if edge_corn > 2.0 else ''}">
+                        <div class="bento-label">Volumen · Córners Totales <span class="badge-quant {bg_corn}">Props</span></div>
+                        <div class="bento-value">Over {linea_corn} Córners</div>
+                        <div class="bento-desc">{corn_fav:.1f} fav | {corn_conc:.1f} conc (Tot: <strong>{corn_comb:.1f} Córn</strong>)</div>
+                        <div style="margin-top: 8px;">
+                            <span class="badge-quant {bg_corn}">EDGE {edge_corn:+.1f}%</span>
+                            <span style="font-size: 0.75rem; color: #94a3b8; margin-left: 8px;">Stake: <strong>{stake_pct_corn:.1f}% Banca</strong></span>
+                        </div>
+                    </div>
+                """, unsafe_allow_html=True)
+
+            # --- MONITOR CUANTITATIVO DISCIPLINARIO ---
             st.markdown("---")
-            st.subheader("🟨 Perfil Disciplinario y Matriz de Fricción")
-            disc_c1, disc_c2, disc_c3 = st.columns(3)
+            st.markdown("#### 🟨 Monitor Cuantitativo Disciplinario & Props de Tarjetas")
 
-            with disc_c1:
-                st.metric(
-                    "Tarjetas Propias Recibidas",
-                    f"{stats_global['amar_prop']:.2f} 🟨 | {stats_global['rojas_prop']:.2f} 🟥",
-                    f"Casa: {stats_home['amar_prop']:.2f} 🟨 vs Fuera: {stats_away['amar_prop']:.2f} 🟨",
-                    delta_color="off",
-                )
-            with disc_c2:
-                st.metric(
-                    "Tarjetas Provocadas al Rival",
-                    f"{stats_global['amar_riv']:.2f} 🟨 | {stats_global['rojas_riv']:.2f} 🟥",
-                    f"Casa: {stats_home['amar_riv']:.2f} 🟨 vs Fuera: {stats_away['amar_riv']:.2f} 🟨",
-                    delta_color="off",
-                )
-            with disc_c3:
-                if stats_global["friccion_idx"] >= 28.0:
-                    badge_fric = "🔥 Alta Fricción (Ideal Over Tarjetas)"
-                elif stats_global["friccion_idx"] >= 23.0:
-                    badge_fric = "⚖️ Fricción Media"
-                else:
-                    badge_fric = "🧊 Juego Fluido / Baja Fricción"
-                st.metric(
-                    "Faltas (Com. vs Rec.) & Índice Fricción",
-                    f"{stats_global['faltas_com']:.1f} C / {stats_global['faltas_rec']:.1f} R (Idx {stats_global['friccion_idx']:.1f})",
-                    badge_fric,
-                    delta_color="off",
-                )
+            faltas_com = float(stats_comp_gen.get('faltas_cometidas_media', 12.0))
+            faltas_rec = float(stats_comp_gen.get('faltas_recibidas_media', 11.5))
+            tarjetas_propias = float(stats_comp_gen.get('tarjetas_propias_media', 2.0)) if 'tarjetas_propias_media' in stats_comp_gen else 2.1
+            tarjetas_casa = float(stats_comp_home.get('tarjetas_propias_media', 1.8)) if 'tarjetas_propias_media' in stats_comp_home else 1.8
+            tarjetas_fuera = float(stats_comp_away.get('tarjetas_propias_media', 2.4)) if 'tarjetas_propias_media' in stats_comp_away else 2.4
 
-            # ── FEATURE 1: CRÓNICA TÁCTICA CUANTITATIVA (DOSSIER VIEW) ───────
-            st.markdown("---")
-            with st.expander("🎙️ Crónica Táctica Cuantitativa", expanded=True):
-                equipos_liga_dossier = sorted(
-                    pd.concat([df_liga_ctx["HomeTeam"], df_liga_ctx["AwayTeam"]]).dropna().unique().tolist()
-                )
-                rivales_disp = [e for e in equipos_liga_dossier if e != equipo_elegido] or [
-                    e for e in todos_equipos if e != equipo_elegido
-                ]
-                censo_global_dos = _obtener_censo_global_arbitros(df_partidos_global)
-                censo_ordenado_dos = sorted(censo_global_dos.values(), key=lambda x: x["nombre"])
-                arbs_dossier = ["🔍 Seleccionar o buscar árbitro..."] + [item["etiqueta_selector"] for item in censo_ordenado_dos]
+            # Ratio Faltas por Tarjeta (severidad táctica)
+            ratio_f_t = faltas_com / max(tarjetas_propias, 0.1)
 
-                # Preselección si el último partido tiene árbitro registrado
-                idx_arb_def = 0
-                ult_ref_cand = ""
-                if "Referee" in df_norm_global.columns and not df_norm_global["Referee"].dropna().empty:
-                    ult_ref_cand = str(df_norm_global["Referee"].dropna().iloc[-1]).strip()
-                if ult_ref_cand:
-                    ult_ref_can = _normalizar_nombre_arbitro(ult_ref_cand)
-                    for _i_opt, _opt_lbl in enumerate(arbs_dossier):
-                        if _opt_lbl.startswith(ult_ref_can):
-                            idx_arb_def = _i_opt
-                            break
+            # Modelo estocástico para Team Cards (Over 1.5 o 2.5 según perfil)
+            lambda_tarj = max(0.5, tarjetas_propias)
+            linea_t = 1.5 if lambda_tarj < 2.3 else 2.5
+            if linea_t == 1.5:
+                prob_t = max(0.10, min(0.90, 1.0 - (float(np.exp(-lambda_tarj)) * (1.0 + lambda_tarj))))
+                cuota_bookie_t = 1.65
+            else:
+                prob_t = max(0.10, min(0.90, 1.0 - (float(np.exp(-lambda_tarj)) * (1.0 + lambda_tarj + (lambda_tarj**2) / 2.0))))
+                cuota_bookie_t = 2.15
 
-                cr_c1, cr_c2, cr_c3 = st.columns([2, 2, 1])
-                with cr_c1:
-                    rival_dossier = st.selectbox(
-                        "🆚 Rival de Emparejamiento:",
-                        rivales_disp,
-                        index=0,
-                        key="dossier_rival_cronica",
-                    )
-                with cr_c2:
-                    arb_dossier = st.selectbox(
-                        "🧑‍⚖️ Colegiado Designado:",
-                        arbs_dossier,
-                        index=idx_arb_def,
-                        key="dossier_arb_cronica",
-                    )
-                with cr_c3:
-                    cuota_merc_dossier = st.number_input(
-                        "💰 Cuota Mercado (1X2/O2.5):",
-                        min_value=1.05,
-                        max_value=15.0,
-                        value=round(max(1.10, 100.0 / max(stats_global["over25"], 10.0)), 2),
-                        step=0.05,
-                        key="dossier_cuota_merc",
-                    )
+            cuota_mod_t = 1.0 / prob_t
+            edge_t = ((cuota_bookie_t / cuota_mod_t) - 1.0) * 100.0
+            stake_t = max(0.0, min(1.5, (edge_t / 100.0) / max(cuota_bookie_t - 1.0, 0.01) / 4.0)) * 100.0
+            badge_t = "badge-quant-green" if edge_t > 0 else "badge-quant-cyan"
 
-                # Resolver y renderizar tarjeta de perfil disciplinario del árbitro seleccionado
-                div_dossier = MAPA_INV.get(comp_dossier_sel, "SP1")
-                perfil_arb_dossier = _calcular_perfil_disciplinario_arbitro(
-                    nombre_arbitro=arb_dossier,
-                    censo_global=censo_global_dos,
-                    df_partidos_global=df_partidos_global,
-                    div_partido=div_dossier,
-                )
-                _renderizar_tarjeta_perfil_arbitro(perfil_arb_dossier)
+            col_d1, col_d2, col_d3 = st.columns(3)
 
-                df_riv_raw = df_partidos_global[
-                    (df_partidos_global["HomeTeam"] == rival_dossier)
-                    | (df_partidos_global["AwayTeam"] == rival_dossier)
-                ].tail(10)
-                df_riv_norm = _normalizar_partidos_equipo(df_riv_raw, rival_dossier)
-                stats_riv = _calcular_resumen_bloque(
-                    df_riv_norm,
-                    usar_decay=usar_decay_dossier,
-                    media_liga_gf=media_liga_global,
-                    media_liga_gc=media_liga_global,
-                )
+            with col_d1:
+                st.markdown(f"""
+                    <div class="bento-tile">
+                        <div class="bento-label">Fricción & Conversión Táctica <span class="badge-quant badge-quant-cyan">Ratio</span></div>
+                        <div class="bento-value">{ratio_f_t:.1f} <span style="font-size:0.9rem;color:#94a3b8;">Faltas/Tarjeta</span></div>
+                        <div class="bento-desc">{faltas_com:.1f} com. vs {faltas_rec:.1f} rec. por partido</div>
+                    </div>
+                """, unsafe_allow_html=True)
 
-                xg_h_cron = float(max(0.25, (stats_home["xg_f"] + stats_riv["xg_c"]) / 2.0)) if stats_home["n"] > 0 else float(stats_global["xg_f"])
-                xg_a_cron = float(max(0.25, (stats_riv["xg_f"] + stats_home["xg_c"]) / 2.0)) if stats_riv["n"] > 0 else float(stats_global["xg_c"])
-                cuota_justa_cron = float(round(100.0 / max(stats_global["over25"], 5.0), 2))
-                friccion_comb = float(stats_global["faltas_com"] + stats_riv["faltas_com"])
+            with col_d2:
+                st.markdown(f"""
+                    <div class="bento-tile">
+                        <div class="bento-label">Asimetría de Amonestaciones <span class="badge-quant badge-quant-cyan">Localía</span></div>
+                        <div class="bento-value">{tarjetas_casa:.2f} <span style="font-size:0.9rem;color:#94a3b8;">(Casa)</span> | {tarjetas_fuera:.2f} <span style="font-size:0.9rem;color:#94a3b8;">(Fuera)</span></div>
+                        <div class="bento-desc">Media global del equipo: <strong>{tarjetas_propias:.2f} tarjetas/90m</strong></div>
+                    </div>
+                """, unsafe_allow_html=True)
 
-                media_tarj_arb = float(perfil_arb_dossier.get("media_amarillas", 4.10))
-                nom_arb_cron = str(perfil_arb_dossier.get("nombre", "Árbitro por confirmar"))
-
-                fallback_payload = {
-                    "home": equipo_elegido,
-                    "away": rival_dossier,
-                    "xg_home": xg_h_cron,
-                    "xg_away": xg_a_cron,
-                    "cuota_mercado": float(cuota_merc_dossier),
-                    "cuota_justa": cuota_justa_cron,
-                    "arbitro": nom_arb_cron,
-                    "media_tarjetas": media_tarj_arb,
-                    "friccion_faltas": friccion_comb,
-                }
-                sys_prompt_cron = (
-                    "Eres un analista táctico y cuantitativo de fútbol profesional. Redacta en español una "
-                    "crónica pre-partido estructurada en 3 bloques ([ANÁLISIS DE EFICIENCIA OFENSIVA Y MÉTRICAS xG], "
-                    "[PERFIL DISCIPLINAR Y FRICCIÓN ARBITRAL], [VEREDICTO CUANTITATIVO Y CONCLUSIÓN DE MERCADO]) "
-                    "usando estrictamente las métricas proporcionadas."
-                )
-                usr_prompt_cron = json.dumps(fallback_payload, ensure_ascii=False)
-                match_id_cron = f"{equipo_elegido}_vs_{rival_dossier}_{nom_arb_cron}_{cuota_merc_dossier:.2f}_{horizonte_muestra}"
-
-                texto_cronica, status_badge = obtener_cronica_partido(
-                    match_id=match_id_cron,
-                    prompt_system=sys_prompt_cron,
-                    prompt_user=usr_prompt_cron,
-                    fallback_data=fallback_payload,
-                )
-                st.caption(status_badge)
-                st.markdown(texto_cronica)
+            with col_d3:
+                st.markdown(f"""
+                    <div class="bento-tile {'bento-edge' if edge_t > 2.0 else ''}">
+                        <div class="bento-label">Prop Tarjetas Equipo <span class="badge-quant {badge_t}">+EV</span></div>
+                        <div class="bento-value">Over {linea_t} Tarjetas Propias</div>
+                        <div class="bento-desc">Modelo: <strong>{cuota_mod_t:.2f}</strong> | Bookie: <strong>{cuota_bookie_t:.2f}</strong></div>
+                        <div style="margin-top: 8px;">
+                            <span class="badge-quant {badge_t}">EDGE {edge_t:+.1f}%</span>
+                            <span style="font-size: 0.75rem; color: #94a3b8; margin-left: 8px;">Stake: <strong>{stake_t:.1f}% Banca</strong></span>
+                        </div>
+                    </div>
+                """, unsafe_allow_html=True)
 
             # ── SECCIÓN COMPLEMENTARIA: HISTORIAL RECIENTE Y PLANTILLA ───────
             st.markdown("---")
@@ -7805,45 +6765,24 @@ elif menu_seleccionado == "📊 Dossier de Equipo":
                     st.info("Sin partidos recientes registrados.")
 
             with col_d2:
-                st.markdown("### ⭐ Plantilla y Estadística Individual")
-                _df_jug_fuente_dos = df_jugadores
-                if comp_dossier_sel in _MAPA_COMP_DOSSIER and RUTA_BD.exists():
-                    try:
-                        with sqlite3.connect(RUTA_BD) as _c_jdos:
-                            _comp_bd_nom = comp_dossier_sel.replace(" (UEFA)", "").strip()
-                            _df_jug_fuente_dos = cargar_jugadores_competicion(_c_jdos, _comp_bd_nom)
-                    except Exception:
-                        _df_jug_fuente_dos = df_jugadores
-                if _df_jug_fuente_dos is not None and not _df_jug_fuente_dos.empty:
-                    if "Equipo" in _df_jug_fuente_dos.columns:
-                        _eq_dos_clean = str(equipo_elegido).strip()
-                        _mask_dos_eq = _df_jug_fuente_dos["Equipo"].astype(str).str.strip() == _eq_dos_clean
-                        if comp_dossier_sel in _MAPA_COMP_DOSSIER and "competicion" in _df_jug_fuente_dos.columns:
-                            _comp_dos_clean = comp_dossier_sel.replace(" (UEFA)", "").strip()
-                            _mask_dos_eq = _mask_dos_eq & (
-                                _df_jug_fuente_dos["competicion"].astype(str).str.strip() == _comp_dos_clean
-                            )
-                        df_jug_eq = _df_jug_fuente_dos[_mask_dos_eq].drop_duplicates(subset=["Jugador"], keep="first").copy()
-                    else:
-                        df_jug_eq = pd.DataFrame()
+                st.markdown("#### ⭐ Dependencia y Producción Individual (Top 5 en Minutos - Ratios P90)")
 
-                    # Esquema intuitivo (goles/asistencias/posicion) con fallback a nombres legados
-                    for _nuevo, _viejo, _etq in (("goles", "Gls", "Goles"), ("asistencias", "Ast", "Asistencias"), ("posicion", "Pos", "Pos")):
-                        if _etq not in df_jug_eq.columns:
-                            if _nuevo in df_jug_eq.columns:
-                                df_jug_eq[_etq] = df_jug_eq[_nuevo]
-                            elif _viejo in df_jug_eq.columns:
-                                df_jug_eq[_etq] = df_jug_eq[_viejo]
-
-                    cols_mostrar = ["Jugador", "Pos", "Goles", "Asistencias"]
-                    tiene_columnas = all(c in df_jug_eq.columns for c in cols_mostrar)
-
-                    if not df_jug_eq.empty and tiene_columnas:
-                        st.dataframe(df_jug_eq[cols_mostrar], width="stretch", hide_index=True)
-                    else:
-                        st.info("Las estadísticas de jugadores no están disponibles en este momento.")
+                if df_censo_p90 is not None and not df_censo_p90.empty:
+                    st.dataframe(
+                        df_censo_p90[['jugador', 'posicion', 'minutos_jugados', 'sot_p90', 'faltas_p90', 'amarillas_p90']],
+                        column_config={
+                            "jugador": st.column_config.TextColumn("Jugador"),
+                            "posicion": st.column_config.TextColumn("Pos"),
+                            "minutos_jugados": st.column_config.NumberColumn("Minutos", format="%d'"),
+                            "sot_p90": st.column_config.NumberColumn("SOT P90", format="%.2f"),
+                            "faltas_p90": st.column_config.NumberColumn("Faltas P90", format="%.2f"),
+                            "amarillas_p90": st.column_config.NumberColumn("AM P90", format="%.2f"),
+                        },
+                        use_container_width=True,
+                        hide_index=True
+                    )
                 else:
-                    st.info("Base de datos de jugadores no disponible.")
+                    st.info("Sin registros de censo telemétrico para este equipo en el rango temporal.")
 
 elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
     st.title("⚔️ Comparador Directo H2H Pro & Cuotas Justas")
@@ -8567,6 +7506,76 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
             df_frec_tabla = pd.DataFrame(filas_frecuencia)
             st.dataframe(df_frec_tabla, width="stretch", hide_index=True)
 
+            # ── 5B. MOTOR POISSON DE VOLUMEN (TIROS A PUERTA Y CÓRNERS TOTALES) ──
+            _mu_sot_loc_casa = (
+                float(_stats_h2h_home["sot_f"])
+                if _stats_h2h_home.get("n", 0) > 0 and float(_stats_h2h_home.get("sot_f", 0.0)) > 0.0
+                else float(sot_l or 4.5)
+            )
+            _mu_sot_vis_conc = (
+                float(_stats_h2h_away["sot_c"])
+                if _stats_h2h_away.get("n", 0) > 0 and float(_stats_h2h_away.get("sot_c", 0.0)) > 0.0
+                else float(sot_v or 3.8)
+            )
+            lambda_sot_h2h = max(0.5, _mu_sot_loc_casa + _mu_sot_vis_conc)
+
+            _mu_cor_loc_casa = (
+                float(_stats_h2h_home["corners_f"])
+                if _stats_h2h_home.get("n", 0) > 0 and float(_stats_h2h_home.get("corners_f", 0.0)) > 0.0
+                else 5.2
+            )
+            _mu_cor_vis_conc = (
+                float(_stats_h2h_away["corners_c"])
+                if _stats_h2h_away.get("n", 0) > 0 and float(_stats_h2h_away.get("corners_c", 0.0)) > 0.0
+                else 4.4
+            )
+            lambda_corners_h2h = max(0.5, _mu_cor_loc_casa + _mu_cor_vis_conc)
+
+            def _construir_matriz_poisson_volumen(lam_vol: float, lineas_eval: list[float]) -> pd.DataFrame:
+                filas_vol = []
+                for lin_v in lineas_eval:
+                    p_under_v = float(np.clip(prob_poisson_acumulada(lin_v, lam_vol), 1e-4, 0.9999))
+                    p_over_v = float(np.clip(1.0 - p_under_v, 1e-4, 0.9999))
+                    cuota_over_v = 1.0 / p_over_v
+                    cuota_under_v = 1.0 / p_under_v
+                    filas_vol.append({
+                        "Línea": f"{lin_v:.1f}",
+                        "Prob. Over (%)": f"{p_over_v * 100.0:.1f}%",
+                        "Cuota Justa Over": f"{cuota_over_v:.2f}",
+                        "Prob. Under (%)": f"{p_under_v * 100.0:.1f}%",
+                        "Cuota Justa Under": f"{cuota_under_v:.2f}",
+                    })
+                return pd.DataFrame(filas_vol)
+
+            col_vol_sot, col_vol_cor = st.columns(2)
+            with col_vol_sot:
+                st.markdown(
+                    f"#### 🎯 Distribución Poisson — Tiros a Puerta Totales (SOT) "
+                    f"`λ = {lambda_sot_h2h:.2f}`"
+                )
+                st.caption(
+                    f"🏠 {eq1} SOT Favor (Casa): **{_mu_sot_loc_casa:.2f}** + "
+                    f"✈️ {eq2} SOT Concedido (Fuera): **{_mu_sot_vis_conc:.2f}**"
+                )
+                df_poisson_sot = _construir_matriz_poisson_volumen(
+                    lambda_sot_h2h, [6.5, 7.5, 8.5, 9.5, 10.5]
+                )
+                st.dataframe(df_poisson_sot, width="stretch", hide_index=True)
+
+            with col_vol_cor:
+                st.markdown(
+                    f"#### 🚩 Distribución Poisson — Córners Totales "
+                    f"`λ = {lambda_corners_h2h:.2f}`"
+                )
+                st.caption(
+                    f"🏠 {eq1} Córners Favor (Casa): **{_mu_cor_loc_casa:.2f}** + "
+                    f"✈️ {eq2} Córners Concedidos (Fuera): **{_mu_cor_vis_conc:.2f}**"
+                )
+                df_poisson_corners = _construir_matriz_poisson_volumen(
+                    lambda_corners_h2h, [7.5, 8.5, 9.5, 10.5, 11.5]
+                )
+                st.dataframe(df_poisson_corners, width="stretch", hide_index=True)
+
             # ── 6. HISTÓRICO H2H DIRECTO (TODAS LAS TEMPORADAS) Y FORMA RECIENTE ──
             st.markdown("---")
             st.subheader("🗄️ Auditoría Histórica SQLite: H2H Directo y Forma Reciente en Liga")
@@ -8657,6 +7666,143 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
             else:
                 st.info("No se registran enfrentamientos directos recientes entre ambos equipos en macro_base_futbol.db.")
 
+                def _calcular_ritmo_reciente_5_oficiales(equipo_consulta: str, stats_fb: dict) -> dict:
+                    df_u5 = pd.DataFrame()
+                    if RUTA_BD.exists():
+                        try:
+                            with sqlite3.connect(RUTA_BD) as conn_u5:
+                                q_u5_sql = """
+                                    SELECT fecha, torneo, equipo_local, equipo_visitante, goles_local, goles_visitante, 
+                                           sot_local, sot_visitante, corners_local, corners_visitante
+                                    FROM partidos 
+                                    WHERE (equipo_local = ? OR equipo_visitante = ?) 
+                                      AND goles_local IS NOT NULL
+                                    ORDER BY fecha DESC LIMIT 5
+                                """
+                                df_u5 = pd.read_sql(q_u5_sql, conn_u5, params=(equipo_consulta, equipo_consulta))
+                                # Ordenación cronológica estricta sobre el historial completo si hay más de 5 registros con formato DD/MM/YYYY
+                                q_u5_full = """
+                                    SELECT fecha, torneo, equipo_local, equipo_visitante, goles_local, goles_visitante, 
+                                           sot_local, sot_visitante, corners_local, corners_visitante
+                                    FROM partidos 
+                                    WHERE (equipo_local = ? OR equipo_visitante = ?) 
+                                      AND goles_local IS NOT NULL
+                                """
+                                df_u5_all = pd.read_sql(q_u5_full, conn_u5, params=(equipo_consulta, equipo_consulta))
+                                if not df_u5_all.empty:
+                                    df_u5_all["_dt"] = pd.to_datetime(df_u5_all["fecha"], errors="coerce", dayfirst=True)
+                                    df_u5 = df_u5_all.sort_values(by="_dt", ascending=False).head(5).copy()
+                        except Exception:
+                            df_u5 = pd.DataFrame()
+
+                    if df_u5.empty and not df_partidos_global.empty:
+                        eq_low = str(equipo_consulta).strip().lower()
+                        sub_mem = df_partidos_global[
+                            (df_partidos_global["HomeTeam"].astype(str).str.strip().str.lower() == eq_low)
+                            | (df_partidos_global["AwayTeam"].astype(str).str.strip().str.lower() == eq_low)
+                        ].dropna(subset=["FTHG", "FTAG"]).copy()
+                        if not sub_mem.empty:
+                            if "Date" in sub_mem.columns:
+                                sub_mem["_dt"] = pd.to_datetime(sub_mem["Date"], errors="coerce", dayfirst=True)
+                                sub_mem = sub_mem.sort_values(by="_dt", ascending=False)
+                            sub_mem = sub_mem.head(5)
+                            df_u5 = pd.DataFrame({
+                                "fecha": sub_mem.get("Date"),
+                                "torneo": sub_mem.get("Liga_Origen", sub_mem.get("Div", "Liga")),
+                                "equipo_local": sub_mem.get("HomeTeam"),
+                                "equipo_visitante": sub_mem.get("AwayTeam"),
+                                "goles_local": sub_mem.get("FTHG"),
+                                "goles_visitante": sub_mem.get("FTAG"),
+                                "sot_local": sub_mem.get("HST"),
+                                "sot_visitante": sub_mem.get("AST"),
+                                "corners_local": sub_mem.get("HC"),
+                                "corners_visitante": sub_mem.get("AC"),
+                            })
+
+                    if df_u5.empty:
+                        return {
+                            "n": 0,
+                            "gf_med": float(stats_fb.get("gf_med", 1.35)),
+                            "gc_med": float(stats_fb.get("gc_med", 1.15)),
+                            "sot_f_med": float(stats_fb.get("sot_f", 4.2)),
+                            "sot_c_med": float(stats_fb.get("sot_c", 3.9)),
+                            "cor_f_med": float(stats_fb.get("corners_f", 5.0)),
+                            "cor_c_med": float(stats_fb.get("corners_c", 4.5)),
+                        }
+
+                    eq_clean = str(equipo_consulta).strip().lower()
+                    es_loc = df_u5["equipo_local"].astype(str).str.strip().str.lower() == eq_clean
+                    gf_s = pd.Series(np.where(es_loc, pd.to_numeric(df_u5["goles_local"], errors="coerce"), pd.to_numeric(df_u5["goles_visitante"], errors="coerce"))).dropna()
+                    gc_s = pd.Series(np.where(es_loc, pd.to_numeric(df_u5["goles_visitante"], errors="coerce"), pd.to_numeric(df_u5["goles_local"], errors="coerce"))).dropna()
+                    sot_f_s = pd.Series(np.where(es_loc, pd.to_numeric(df_u5["sot_local"], errors="coerce"), pd.to_numeric(df_u5["sot_visitante"], errors="coerce"))).dropna()
+                    sot_c_s = pd.Series(np.where(es_loc, pd.to_numeric(df_u5["sot_visitante"], errors="coerce"), pd.to_numeric(df_u5["sot_local"], errors="coerce"))).dropna()
+                    cor_f_s = pd.Series(np.where(es_loc, pd.to_numeric(df_u5["corners_local"], errors="coerce"), pd.to_numeric(df_u5["corners_visitante"], errors="coerce"))).dropna()
+                    cor_c_s = pd.Series(np.where(es_loc, pd.to_numeric(df_u5["corners_visitante"], errors="coerce"), pd.to_numeric(df_u5["corners_local"], errors="coerce"))).dropna()
+
+                    return {
+                        "n": int(len(df_u5)),
+                        "gf_med": float(gf_s.mean()) if not gf_s.empty else float(stats_fb.get("gf_med", 1.35)),
+                        "gc_med": float(gc_s.mean()) if not gc_s.empty else float(stats_fb.get("gc_med", 1.15)),
+                        "sot_f_med": float(sot_f_s.mean()) if not sot_f_s.empty else float(stats_fb.get("sot_f", 4.2)),
+                        "sot_c_med": float(sot_c_s.mean()) if not sot_c_s.empty else float(stats_fb.get("sot_c", 3.9)),
+                        "cor_f_med": float(cor_f_s.mean()) if not cor_f_s.empty else float(stats_fb.get("corners_f", 5.0)),
+                        "cor_c_med": float(cor_c_s.mean()) if not cor_c_s.empty else float(stats_fb.get("corners_c", 4.5)),
+                    }
+
+                with st.container(border=True):
+                    st.markdown("##### 📊 Ritmo Táctico y Rendimiento Reciente Cruzado (Últimos 5 Partidos Oficiales)")
+                    _ritmo_loc = _calcular_ritmo_reciente_5_oficiales(eq1, _stats_h2h_home)
+                    _ritmo_vis = _calcular_ritmo_reciente_5_oficiales(eq2, _stats_h2h_away)
+                    _sot_comb_proy = _ritmo_loc["sot_f_med"] + _ritmo_vis["sot_f_med"]
+
+                    if _sot_comb_proy > 10.0:
+                        _badge_ritmo_txt = "⚡ Partido de Alto Ritmo Ofensivo"
+                        _badge_ritmo_bg = "rgba(16, 185, 129, 0.16)"
+                        _badge_ritmo_bd = "#10B981"
+                        _badge_ritmo_cl = "#6EE7B7"
+                    else:
+                        _badge_ritmo_txt = "🛡️ Duelo Táctico / Bajo Ritmo de Disparos"
+                        _badge_ritmo_bg = "rgba(56, 189, 248, 0.14)"
+                        _badge_ritmo_bd = "#38BDF8"
+                        _badge_ritmo_cl = "#7DD3FC"
+
+                    st.markdown(
+                        f"<div style='background:{_badge_ritmo_bg};border:1.5px solid {_badge_ritmo_bd};"
+                        f"border-radius:8px;padding:10px 14px;margin-bottom:12px;display:flex;"
+                        f"justify-content:space-between;align-items:center;'>"
+                        f"<span style='font-weight:800;font-size:14px;color:{_badge_ritmo_cl};'>{_badge_ritmo_txt}</span>"
+                        f"<span style='font-size:12.5px;color:#E2E8F0;'>SOT Medio Combinado Proyectado: "
+                        f"<b>{_sot_comb_proy:.2f} tiros a puerta/90m</b></span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                    _c_rit1, _c_rit2 = st.columns(2)
+                    with _c_rit1:
+                        st.markdown(
+                            f"<div style='background:#16192b;border:1px solid #2d3748;border-radius:10px;padding:14px;'>"
+                            f"<div style='font-size:14px;font-weight:800;color:#10B981;margin-bottom:8px;'>"
+                            f"🏠 Equipo Local: {eq1} (Últ. {_ritmo_loc['n']} Partidos Oficiales)</div>"
+                            f"<div style='font-size:13px;color:#E2E8F0;line-height:1.7;'>"
+                            f"⚽ <b>Goles (Anotados / Encajados):</b> {_ritmo_loc['gf_med']:.2f} / {_ritmo_loc['gc_med']:.2f}<br>"
+                            f"🎯 <b>SOT (A Favor / En Contra):</b> {_ritmo_loc['sot_f_med']:.2f} / {_ritmo_loc['sot_c_med']:.2f}<br>"
+                            f"🚩 <b>Córners (A Favor / En Contra):</b> {_ritmo_loc['cor_f_med']:.2f} / {_ritmo_loc['cor_c_med']:.2f}"
+                            f"</div></div>",
+                            unsafe_allow_html=True,
+                        )
+                    with _c_rit2:
+                        st.markdown(
+                            f"<div style='background:#16192b;border:1px solid #2d3748;border-radius:10px;padding:14px;'>"
+                            f"<div style='font-size:14px;font-weight:800;color:#38BDF8;margin-bottom:8px;'>"
+                            f"✈️ Equipo Visitante: {eq2} (Últ. {_ritmo_vis['n']} Partidos Oficiales)</div>"
+                            f"<div style='font-size:13px;color:#E2E8F0;line-height:1.7;'>"
+                            f"⚽ <b>Goles (Anotados / Encajados):</b> {_ritmo_vis['gf_med']:.2f} / {_ritmo_vis['gc_med']:.2f}<br>"
+                            f"🎯 <b>SOT (A Favor / En Contra):</b> {_ritmo_vis['sot_f_med']:.2f} / {_ritmo_vis['sot_c_med']:.2f}<br>"
+                            f"🚩 <b>Córners (A Favor / En Contra):</b> {_ritmo_vis['cor_f_med']:.2f} / {_ritmo_vis['cor_c_med']:.2f}"
+                            f"</div></div>",
+                            unsafe_allow_html=True,
+                        )
+
             # 6b & 6c) Forma Reciente en Liga - Últimos 3 partidos de cada equipo
             def _construir_tabla_ultimos_3(df_fuente: pd.DataFrame, equipo_obj: str) -> pd.DataFrame:
                 eq_norm_low = str(equipo_obj).strip().lower()
@@ -8737,7 +7883,2167 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
             st.warning("Selecciona dos equipos distintos para realizar la comparativa.")
 
 elif menu_seleccionado == "🎯 Radar de Tendencias":
-    render_radar_tendencias()
+    import os as _os_rad
+    import html as _html_rad
+    try:
+        from google import genai as _genai_rad
+        _RADAR_GENAI_OK = True
+    except Exception:
+        _genai_rad = None
+        _RADAR_GENAI_OK = False
+
+    # ── PILAR 1: DARK-THEME NATIVE UI & SCOPED STYLING OVERHAUL ──────────────
+    st.markdown(
+        """
+        <style>
+        .radar-hero-banner {
+            background: linear-gradient(135deg, #0e1117 0%, #161922 55%, #1e2230 100%);
+            border: 1px solid #2d3345;
+            border-left: 4px solid #38bdf8;
+            border-radius: 12px;
+            padding: 16px 20px;
+            margin-bottom: 16px;
+        }
+        .radar-choque-wrapper {
+            background: linear-gradient(135deg, #121723 0%, #192032 100%);
+            border: 1px solid rgba(56, 189, 248, 0.45);
+            border-radius: 12px;
+            padding: 16px 18px;
+            margin-bottom: 18px;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+        }
+        .radar-choque-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 12px;
+            margin-top: 12px;
+        }
+        .radar-choque-card {
+            background-color: #0e1117;
+            border: 1px solid #262c3d;
+            border-top: 3px solid #00d26a;
+            border-radius: 10px;
+            padding: 13px 15px;
+        }
+        .radar-dark-table-wrap {
+            background-color: #161922;
+            border: 1px solid #262c3d;
+            border-radius: 12px;
+            overflow-x: auto;
+            margin-top: 8px;
+            margin-bottom: 14px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.30);
+        }
+        table.radar-dark-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.87rem;
+            color: #f0f2f6;
+            background-color: #161922;
+        }
+        table.radar-dark-table thead tr {
+            background-color: #1e2230;
+            border-bottom: 2px solid #2d3448;
+        }
+        table.radar-dark-table th {
+            padding: 11px 13px;
+            text-align: left;
+            font-weight: 700;
+            color: #94a3b8;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 0.04em;
+            white-space: nowrap;
+        }
+        table.radar-dark-table tbody tr {
+            border-bottom: 1px solid #222736;
+            background-color: #161922;
+            transition: background-color 0.15s ease;
+        }
+        table.radar-dark-table tbody tr:nth-child(even) {
+            background-color: #131620;
+        }
+        table.radar-dark-table tbody tr:hover {
+            background-color: #1e2436;
+        }
+        table.radar-dark-table td {
+            padding: 10px 13px;
+            vertical-align: middle;
+        }
+        .pill-win {
+            display: inline-block;
+            background-color: rgba(0, 210, 106, 0.14);
+            color: #00d26a;
+            border: 1px solid rgba(0, 210, 106, 0.42);
+            border-radius: 6px;
+            padding: 2px 7px;
+            margin: 2px 3px 2px 0;
+            font-family: monospace;
+            font-size: 0.77rem;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+        .pill-loss {
+            display: inline-block;
+            background-color: rgba(248, 113, 113, 0.14);
+            color: #f87171;
+            border: 1px solid rgba(248, 113, 113, 0.42);
+            border-radius: 6px;
+            padding: 2px 7px;
+            margin: 2px 3px 2px 0;
+            font-family: monospace;
+            font-size: 0.77rem;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .pill-ev-high {
+            display: inline-block;
+            background-color: rgba(0, 210, 106, 0.16);
+            color: #00d26a;
+            border: 1px solid #00d26a;
+            border-radius: 6px;
+            padding: 3px 9px;
+            font-family: monospace;
+            font-size: 0.80rem;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+        .pill-ev-cyan {
+            display: inline-block;
+            background-color: rgba(56, 189, 248, 0.15);
+            color: #38bdf8;
+            border: 1px solid rgba(56, 189, 248, 0.50);
+            border-radius: 6px;
+            padding: 3px 9px;
+            font-family: monospace;
+            font-size: 0.80rem;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+        .pill-ev-neg {
+            display: inline-block;
+            background-color: rgba(248, 113, 113, 0.14);
+            color: #f87171;
+            border: 1px solid rgba(248, 113, 113, 0.42);
+            border-radius: 6px;
+            padding: 3px 9px;
+            font-family: monospace;
+            font-size: 0.80rem;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+        .pill-fixture {
+            display: inline-block;
+            background-color: #1e2230;
+            color: #e2e8f0;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            padding: 3px 8px;
+            font-size: 0.79rem;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .pill-fixture-none {
+            display: inline-block;
+            background-color: rgba(100, 116, 139, 0.14);
+            color: #94a3b8;
+            border: 1px solid rgba(100, 116, 139, 0.30);
+            border-radius: 6px;
+            padding: 3px 8px;
+            font-size: 0.78rem;
+            white-space: nowrap;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.title("🎯 Radar Cuantitativo de Tendencias & Convergencia EV+")
+    st.markdown(
+        "<div class='radar-hero-banner'>"
+        "📡 <b>Escáner Institucional de Rachas y Valor Esperado:</b> Detección de rachas empíricas por condición de campo, "
+        "cruce automático con el calendario próximo, motor de <b>Choque de Tendencias (Doble Coincidencia)</b>, "
+        "calibración <b>Cuota Justa Zero-Vig vs Mercado</b> y síntesis ejecutiva con <b>Google AI Studio</b>."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    if err_partidos or df_partidos.empty:
+        st.warning("No hay suficientes datos históricos disponibles en `macro_base_futbol.db`.")
+    else:
+        # Normalización defensiva de columna de liga para soportar tanto filtro lateral como selector propio
+        try:
+            df_rad_base = df_partidos.copy()
+            col_div_rad = next(
+                (c for c in ("Div", "Liga_Origen") if c in df_rad_base.columns),
+                next((c for c in df_rad_base.columns if "Div" in str(c)), None),
+            )
+            divs_disp_rad = (
+                [d for d in MAPA_LIGAS if d in set(df_rad_base[col_div_rad].dropna().astype(str))]
+                if col_div_rad
+                else []
+            )
+        except Exception as _exc_init_rad:
+            st.session_state["radar_runtime_warning"] = f"Aviso de inicialización en Radar: {_exc_init_rad}"
+            df_rad_base = pd.DataFrame()
+            col_div_rad = None
+            divs_disp_rad = []
+
+        opciones_liga_rad = ["Todas las Competiciones"] + [MAPA_LIGAS[d] for d in divs_disp_rad]
+
+        OPCIONES_RADAR = {
+            "⚽ Goles Totales": [
+                "Más de 1.5", "Menos de 1.5", "Más de 2.5", "Menos de 2.5",
+                "Más de 3.5", "Menos de 3.5", "Más de 4.5", "Menos de 4.5",
+            ],
+            "⏱️ Goles 1ª / 2ª Parte": [
+                "Más de 0.5 (1ªP)", "Menos de 0.5 (1ªP)", "Más de 1.5 (1ªP)", "Menos de 1.5 (1ªP)",
+                "Más de 0.5 (2ªP)", "Menos de 0.5 (2ªP)", "Más de 1.5 (2ªP)", "Menos de 1.5 (2ªP)",
+            ],
+            "🚩 Córners Totales": [
+                "Más de 6.5", "Menos de 6.5", "Más de 7.5", "Menos de 7.5",
+                "Más de 8.5", "Menos de 8.5", "Más de 9.5", "Menos de 9.5",
+                "Más de 10.5", "Menos de 10.5",
+            ],
+            "🟨 Fricción Disciplinaria (Tarjetas)": [
+                "Más de 3.5", "Menos de 3.5", "Más de 4.5", "Menos de 4.5",
+                "Más de 5.5", "Menos de 5.5", "Más de 6.5", "Menos de 6.5",
+            ],
+            "🎯 Ambos Marcan (BTTS)": [
+                "Ambos Marcan: SÍ", "Ambos Marcan: NO",
+            ],
+            "🛡️ Hándicap Asiático Cubierto (ATS)": [
+                "Línea Cubierta",
+            ],
+            "⚽ Goles Individuales de Equipo": [
+                "Más de 0.5 Goles (Equipo)",
+                "Más de 1.5 Goles (Equipo)",
+                "Más de 2.5 Goles (Equipo)",
+            ],
+            "🎯 Tiros y Tiros a Puerta (SOT)": [
+                "Más de 23.5 Tiros Totales",
+                "Más de 8.5 Tiros a Puerta (SOT)",
+                "Más de 4.5 SOT (Individual Equipo)",
+            ],
+            "⚡ Fricción de Faltas": [
+                "Más de 22.5 Faltas Totales",
+                "Más de 24.5 Faltas Totales",
+                "Más de 26.5 Faltas Totales",
+            ],
+            "🛡️ Portería a Cero (Clean Sheet)": [
+                "Portería a Cero (Clean Sheet)",
+                "Recibe Gol (Concede)",
+            ],
+            "🔥 Doble Oportunidad + Goles": [
+                "1X + Más de 1.5 Goles",
+                "X2 + Más de 1.5 Goles",
+                "1X + Menos de 4.5 Goles",
+            ],
+        }
+
+        col_rf0, col_rf1, col_rf2 = st.columns([1.5, 1.2, 1.3])
+        with col_rf0:
+            liga_rad_sel = st.selectbox(
+                "🌍 Competición Activa:",
+                opciones_liga_rad,
+                index=0,
+                key="radar_comp_unif",
+            )
+        with col_rf1:
+            filtro_cond_raw = st.radio(
+                "🏠 Condición de Campo:",
+                ["🌐 Global", "🏠 Local", "✈️ Visitante"],
+                horizontal=True,
+                key="radar_cond_unif",
+            )
+            filtro_condicion = "Local" if "Local" in filtro_cond_raw else ("Visitante" if "Visitante" in filtro_cond_raw else "Global")
+        with col_rf2:
+            es_comp_uefa_activa = any(
+                u in str(st.session_state.get("competicion_activa", "")).lower()
+                or u in str(liga_rad_sel).lower()
+                for u in ["champions", "europa", "conference", "uefa", "ucl", "uel", "uecl"]
+            )
+            umbral_racha = st.select_slider(
+                "🔥 Umbral de Racha:",
+                options=[1, 2, 3, 4, 5],
+                value=2 if es_comp_uefa_activa else 3,
+                format_func=lambda x: f"Mínimo {x}/5 ({x * 20}%)",
+                key="radar_umbral_unif",
+            )
+
+        try:
+            if liga_rad_sel != "Todas las Competiciones" and col_div_rad and not df_rad_base.empty:
+                div_target_rad = MAPA_INV.get(liga_rad_sel, "")
+                df_rad = df_rad_base[df_rad_base[col_div_rad].astype(str) == str(div_target_rad)].copy()
+            else:
+                df_rad = df_rad_base.copy()
+
+            for _cn in (
+                "FTHG", "FTAG", "HTHG", "HTAG", "HC", "AC", "HY", "AY", "HR", "AR",
+                "HS", "AS", "HST", "AST", "HF", "AF",
+                "AHh", "AHCh", "Avg>2.5", "B365>2.5", "Max>2.5",
+                "AvgH", "AvgD", "AvgA", "B365H", "B365A",
+                "AvgAHH", "AvgAHA", "B365AHH", "B365AHA", "MaxAHH", "MaxAHA",
+            ):
+                if _cn in df_rad.columns:
+                    df_rad[_cn] = pd.to_numeric(df_rad[_cn], errors="coerce")
+                if _cn in df_rad_base.columns:
+                    df_rad_base[_cn] = pd.to_numeric(df_rad_base[_cn], errors="coerce")
+
+            if "Date" in df_rad.columns:
+                df_rad["Date_Parsed"] = pd.to_datetime(df_rad["Date"], errors="coerce", dayfirst=True)
+            else:
+                df_rad["Date_Parsed"] = pd.NaT
+
+            if "Date" in df_rad_base.columns:
+                df_rad_base["Date_Parsed"] = pd.to_datetime(df_rad_base["Date"], errors="coerce", dayfirst=True)
+            else:
+                df_rad_base["Date_Parsed"] = pd.NaT
+        except Exception as _exc_prep_rad:
+            st.session_state["radar_runtime_warning"] = f"Aviso al preparar datos del Radar: {_exc_prep_rad}"
+            df_rad = df_rad_base.copy()
+            if "Date_Parsed" not in df_rad.columns:
+                df_rad["Date_Parsed"] = pd.NaT
+
+        # ── Helpers internos del Radar (Pilar 2, 3, 4 y 5) ───────────────────
+        import unicodedata as _ud_rad
+        import difflib as _difflib_rad
+        try:
+            import conector_odds as _co_rad
+        except Exception:
+            _co_rad = None
+
+        def _abrev_rival_radar(nombre_eq: str) -> str:
+            try:
+                limpio = "".join(ch for ch in str(nombre_eq or "RIV").upper() if ch.isalnum() or ch == " ").strip()
+                partes = limpio.split()
+                if len(partes) >= 2 and len(partes[0]) <= 3:
+                    return (partes[0][:1] + partes[1][:2]).upper()[:3]
+                return (limpio.replace(" ", "") + "RIV")[:3]
+            except Exception:
+                return "RIV"
+
+        _ALIAS_CANONICOS_RADAR = {
+            # España (LaLiga / LaLiga 2)
+            "athletic": "Ath Bilbao",
+            "athletic club": "Ath Bilbao",
+            "athletic bilbao": "Ath Bilbao",
+            "athletic club de bilbao": "Ath Bilbao",
+            "ath bilbao": "Ath Bilbao",
+            "sociedad": "Sociedad",
+            "real sociedad": "Sociedad",
+            "la real": "Sociedad",
+            "santander": "Santander",
+            "racing": "Santander",
+            "racing santander": "Santander",
+            "real racing": "Santander",
+            "real racing club": "Santander",
+            "real racing club de santander": "Santander",
+            "racing de santander": "Santander",
+            "espanyol": "Espanol",
+            "rcd espanyol": "Espanol",
+            "rcd espanyol de barcelona": "Espanol",
+            "espanol": "Espanol",
+            "atletico": "Ath Madrid",
+            "atletico madrid": "Ath Madrid",
+            "atletico de madrid": "Ath Madrid",
+            "club atletico de madrid": "Ath Madrid",
+            "ath madrid": "Ath Madrid",
+            "alaves": "Alaves",
+            "deportivo alaves": "Alaves",
+            "cd alaves": "Alaves",
+            "celta": "Celta",
+            "rc celta": "Celta",
+            "celta vigo": "Celta",
+            "celta de vigo": "Celta",
+            "rc celta de vigo": "Celta",
+            "betis": "Betis",
+            "real betis": "Betis",
+            "real betis balompie": "Betis",
+            "vallecano": "Vallecano",
+            "rayo vallecano": "Vallecano",
+            "rayo": "Vallecano",
+            "leganes": "Leganes",
+            "cd leganes": "Leganes",
+            "valladolid": "Valladolid",
+            "real valladolid": "Valladolid",
+            "real valladolid cf": "Valladolid",
+            "las palmas": "Las Palmas",
+            "ud las palmas": "Las Palmas",
+            "la coruna": "La Coruna",
+            "deportivo la coruna": "La Coruna",
+            "rc deportivo": "La Coruna",
+            "deportivo": "La Coruna",
+            "osasuna": "Osasuna",
+            "ca osasuna": "Osasuna",
+            "girona": "Girona",
+            "girona fc": "Girona",
+            "mallorca": "Mallorca",
+            "rcd mallorca": "Mallorca",
+            "getafe": "Getafe",
+            "getafe cf": "Getafe",
+            "sevilla": "Sevilla",
+            "sevilla fc": "Sevilla",
+            "valencia": "Valencia",
+            "valencia cf": "Valencia",
+            "villarreal": "Villarreal",
+            "villarreal cf": "Villarreal",
+            "real madrid": "Real Madrid",
+            "real madrid cf": "Real Madrid",
+            "barcelona": "Barcelona",
+            "fc barcelona": "Barcelona",
+            "elche": "Elche",
+            "elche cf": "Elche",
+            "malaga": "Malaga",
+            "malaga cf": "Malaga",
+            "levante": "Levante",
+            "levante ud": "Levante",
+            "oviedo": "Oviedo",
+            "real oviedo": "Oviedo",
+            "gijon": "Gijon",
+            "sporting gijon": "Gijon",
+            "sporting de gijon": "Gijon",
+            "real sporting": "Gijon",
+            "zaragoza": "Zaragoza",
+            "real zaragoza": "Zaragoza",
+            # Inglaterra (Premier League / Championship)
+            "manchester united": "Man United",
+            "man united": "Man United",
+            "man utd": "Man United",
+            "manchester city": "Man City",
+            "man city": "Man City",
+            "nottingham": "Nott'm Forest",
+            "nottingham forest": "Nott'm Forest",
+            "nott'm forest": "Nott'm Forest",
+            "nottm forest": "Nott'm Forest",
+            "wolverhampton": "Wolves",
+            "olverhampton": "Wolves",
+            "wolverhampton wanderers": "Wolves",
+            "wolves": "Wolves",
+            "newcastle": "Newcastle",
+            "newcastle united": "Newcastle",
+            "tottenham": "Tottenham",
+            "tottenham hotspur": "Tottenham",
+            "spurs": "Tottenham",
+            "brighton": "Brighton",
+            "brighton and hove albion": "Brighton",
+            "brighton & hove albion": "Brighton",
+            "west ham": "West Ham",
+            "west ham united": "West Ham",
+            "leicester": "Leicester",
+            "leicester city": "Leicester",
+            "ipswich": "Ipswich",
+            "ipswich town": "Ipswich",
+            "leeds": "Leeds",
+            "leeds united": "Leeds",
+            "coventry": "Coventry",
+            "coventry city": "Coventry",
+            "hull": "Hull",
+            "hull city": "Hull",
+            "bournemouth": "Bournemouth",
+            "afc bournemouth": "Bournemouth",
+            # Alemania (Bundesliga)
+            "bayern": "Bayern Munich",
+            "bayern munich": "Bayern Munich",
+            "bayern munchen": "Bayern Munich",
+            "fc bayern munchen": "Bayern Munich",
+            "leverkusen": "Leverkusen",
+            "bayer leverkusen": "Leverkusen",
+            "bayer 04 leverkusen": "Leverkusen",
+            "dortmund": "Dortmund",
+            "borussia dortmund": "Dortmund",
+            "gladbach": "M'gladbach",
+            "monchengladbach": "M'gladbach",
+            "borussia monchengladbach": "M'gladbach",
+            "m'gladbach": "M'gladbach",
+            "mgladbach": "M'gladbach",
+            "frankfurt": "Ein Frankfurt",
+            "eintracht frankfurt": "Ein Frankfurt",
+            "ein frankfurt": "Ein Frankfurt",
+            "stuttgart": "Stuttgart",
+            "vfb stuttgart": "Stuttgart",
+            "freiburg": "Freiburg",
+            "sc freiburg": "Freiburg",
+            "hoffenheim": "Hoffenheim",
+            "tsg hoffenheim": "Hoffenheim",
+            "tsg 1899 hoffenheim": "Hoffenheim",
+            "heidenheim": "Heidenheim",
+            "1. fc heidenheim": "Heidenheim",
+            "st pauli": "St Pauli",
+            "fc st. pauli": "St Pauli",
+            "fc st pauli": "St Pauli",
+            "mainz": "Mainz",
+            "mainz 05": "Mainz",
+            "fsv mainz 05": "Mainz",
+            "1. fsv mainz 05": "Mainz",
+            "wolfsburg": "Wolfsburg",
+            "vfl wolfsburg": "Wolfsburg",
+            "augsburg": "Augsburg",
+            "fc augsburg": "Augsburg",
+            "fc koln": "FC Koln",
+            "1. fc koln": "FC Koln",
+            "koln": "FC Koln",
+            "cologne": "FC Koln",
+            "hamburg": "Hamburg",
+            "hamburger sv": "Hamburg",
+            "paderborn": "Paderborn",
+            "sc paderborn": "Paderborn",
+            "sc paderborn 07": "Paderborn",
+            "schalke": "Schalke 04",
+            "schalke 04": "Schalke 04",
+            "fc schalke 04": "Schalke 04",
+            "elversberg": "Elversberg",
+            "sv elversberg": "Elversberg",
+            "rb leipzig": "RB Leipzig",
+            "leipzig": "RB Leipzig",
+            "werder bremen": "Werder Bremen",
+            "sv werder bremen": "Werder Bremen",
+            "bremen": "Werder Bremen",
+            "union berlin": "Union Berlin",
+            "1. fc union berlin": "Union Berlin",
+            "bochum": "Bochum",
+            "vfl bochum": "Bochum",
+            "holstein kiel": "Holstein Kiel",
+            "kiel": "Holstein Kiel",
+            # Italia (Serie A)
+            "inter": "Inter",
+            "inter milan": "Inter",
+            "internazionale": "Inter",
+            "fc internazionale": "Inter",
+            "milan": "Milan",
+            "ac milan": "Milan",
+            "juventus": "Juventus",
+            "juventus fc": "Juventus",
+            "roma": "Roma",
+            "as roma": "Roma",
+            "atalanta": "Atalanta",
+            "atalanta bc": "Atalanta",
+            "verona": "Verona",
+            "hellas verona": "Verona",
+            "parma": "Parma",
+            "parma calcio": "Parma",
+            "parma calcio 1913": "Parma",
+            "napoli": "Napoli",
+            "ssc napoli": "Napoli",
+            "lazio": "Lazio",
+            "ss lazio": "Lazio",
+            "fiorentina": "Fiorentina",
+            "acf fiorentina": "Fiorentina",
+            "bologna": "Bologna",
+            "bologna fc": "Bologna",
+            "torino": "Torino",
+            "torino fc": "Torino",
+            "udinese": "Udinese",
+            "udinese calcio": "Udinese",
+            "genoa": "Genoa",
+            "genoa cfc": "Genoa",
+            "cagliari": "Cagliari",
+            "cagliari calcio": "Cagliari",
+            "empoli": "Empoli",
+            "empoli fc": "Empoli",
+            "lecce": "Lecce",
+            "us lecce": "Lecce",
+            "monza": "Monza",
+            "ac monza": "Monza",
+            "venezia": "Venezia",
+            "venezia fc": "Venezia",
+            "como": "Como",
+            "como 1907": "Como",
+            # Francia (Ligue 1)
+            "psg": "Paris SG",
+            "paris": "Paris SG",
+            "paris sg": "Paris SG",
+            "paris saint germain": "Paris SG",
+            "paris saint-germain": "Paris SG",
+            "paris fc": "Paris FC",
+            "monaco": "Monaco",
+            "as monaco": "Monaco",
+            "lens": "Lens",
+            "rc lens": "Lens",
+            "le mans": "Le Mans",
+            "le mans fc": "Le Mans",
+            "marseille": "Marseille",
+            "olympique marseille": "Marseille",
+            "lyon": "Lyon",
+            "olympique lyonnais": "Lyon",
+            "lille": "Lille",
+            "losc lille": "Lille",
+            "nice": "Nice",
+            "ogc nice": "Nice",
+            "rennes": "Rennes",
+            "stade rennais": "Rennes",
+            "brest": "Brest",
+            "stade brestois": "Brest",
+            "reims": "Reims",
+            "stade de reims": "Reims",
+            "strasbourg": "Strasbourg",
+            "rc strasbourg": "Strasbourg",
+            "toulouse": "Toulouse",
+            "toulouse fc": "Toulouse",
+            "montpellier": "Montpellier",
+            "montpellier hsc": "Montpellier",
+            "nantes": "Nantes",
+            "fc nantes": "Nantes",
+            "le havre": "Le Havre",
+            "le havre ac": "Le Havre",
+            "auxerre": "Auxerre",
+            "aj auxerre": "Auxerre",
+            "angers": "Angers",
+            "angers sco": "Angers",
+            "st etienne": "St Etienne",
+            "saint-etienne": "St Etienne",
+            "as saint-etienne": "St Etienne",
+        }
+
+        def _limpiar_texto_radar(texto: str) -> str:
+            try:
+                sin_acentos = _ud_rad.normalize("NFKD", str(texto or "")).encode("ascii", "ignore").decode("ascii")
+                limpio = re.sub(r"[^a-zA-Z0-9'\s-]", " ", sin_acentos).lower()
+                return " ".join(limpio.split())
+            except Exception:
+                return str(texto or "").strip().lower()
+
+        def _despojar_afijos_club_radar(texto_norm: str) -> str:
+            try:
+                t = f" {texto_norm.replace('-', ' ')} "
+                for pref in (
+                    " real ", " rc ", " rcd ", " cf ", " cd ", " ud ", " sd ", " fc ",
+                    " ca ", " ac ", " as ", " sc ", " vfb ", " vfl ", " tsg ", " 1 fc ",
+                    " sv ", " fsv ", " club ", " deportivo ", " balompie ", " sad ",
+                    " de ", " la ", " el ", " calcio ", " 1913 ", " 1907 ", " 05 ", " 07 ",
+                    " bc ", " cfc ", " hsc ", " sco ", " losc ", " ogc ", " aj ",
+                ):
+                    t = t.replace(pref, " ")
+                res = " ".join(t.split())
+                return res if res else texto_norm
+            except Exception:
+                return texto_norm
+
+        def _normalizar_y_emparejar_equipo(nombre_api: str, lista_equipos_db: list[str]) -> str | None:
+            """
+            Normalizador bidireccional y emparejador difuso entre nombres de la API / fuentes externas
+            y los nombres canónicos de `macro_base_futbol.db`.
+            """
+            try:
+                if not nombre_api or not lista_equipos_db:
+                    return None
+
+                raw_str = str(nombre_api).strip()
+                if raw_str in lista_equipos_db:
+                    return raw_str
+
+                idx_norm = {_limpiar_texto_radar(eq): eq for eq in lista_equipos_db if eq}
+                clave_norm = _limpiar_texto_radar(raw_str)
+                if not clave_norm:
+                    return None
+
+                if clave_norm in idx_norm:
+                    return idx_norm[clave_norm]
+
+                # 1) Diccionarios existentes en conector_odds.py y dashboard.py + alias canónicos explícitos
+                mapa_combinado = {}
+                if _co_rad is not None and hasattr(_co_rad, "MAPA_EQUIPOS_API"):
+                    for k_m, v_m in getattr(_co_rad, "MAPA_EQUIPOS_API", {}).items():
+                        mapa_combinado[_limpiar_texto_radar(k_m)] = v_m
+                if "CANONICAL_TEAM_MAP" in globals():
+                    for k_m, v_m in CANONICAL_TEAM_MAP.items():
+                        mapa_combinado[_limpiar_texto_radar(k_m)] = v_m
+                for k_m, v_m in _ALIAS_CANONICOS_RADAR.items():
+                    mapa_combinado[_limpiar_texto_radar(k_m)] = v_m
+
+                if clave_norm in mapa_combinado:
+                    cand_canon = _limpiar_texto_radar(mapa_combinado[clave_norm])
+                    if cand_canon in idx_norm:
+                        return idx_norm[cand_canon]
+
+                # 2) Limpieza de prefijos/sufijos comunes ("real ", "rc ", "cf ", "cd ", "ud ", "fc ", "club ", "deportivo ", "balompie", "sad")
+                clave_strip = _despojar_afijos_club_radar(clave_norm)
+                if clave_strip in idx_norm:
+                    return idx_norm[clave_strip]
+                if clave_strip in mapa_combinado:
+                    cand_canon = _limpiar_texto_radar(mapa_combinado[clave_strip])
+                    if cand_canon in idx_norm:
+                        return idx_norm[cand_canon]
+
+                idx_strip = {_despojar_afijos_club_radar(k): v for k, v in idx_norm.items() if _despojar_afijos_club_radar(k)}
+                if clave_strip in idx_strip:
+                    return idx_strip[clave_strip]
+
+                # 3) Substring / solapamiento de tokens significativos
+                tokens_api = [tk for tk in clave_strip.split() if len(tk) >= 3]
+                for tk in tokens_api:
+                    if tk in mapa_combinado:
+                        cand_tk = _limpiar_texto_radar(mapa_combinado[tk])
+                        if cand_tk in idx_norm and cand_tk not in ("real madrid", "man united", "man city", "paris sg", "paris fc"):
+                            return idx_norm[cand_tk]
+
+                candidatos_sub = []
+                for k_db_s, eq_orig in idx_strip.items():
+                    if not k_db_s:
+                        continue
+                    if clave_strip in k_db_s or (len(k_db_s) >= 4 and k_db_s in clave_strip):
+                        candidatos_sub.append((abs(len(k_db_s) - len(clave_strip)), eq_orig))
+                if candidatos_sub:
+                    candidatos_sub.sort(key=lambda x: x[0])
+                    return candidatos_sub[0][1]
+
+                # 4) Fallback difflib.get_close_matches
+                coincidencias_diff = _difflib_rad.get_close_matches(clave_strip, list(idx_strip.keys()), n=1, cutoff=0.72)
+                if coincidencias_diff:
+                    return idx_strip[coincidencias_diff[0]]
+
+                coincidencias_norm = _difflib_rad.get_close_matches(clave_norm, list(idx_norm.keys()), n=1, cutoff=0.72)
+                if coincidencias_norm:
+                    return idx_norm[coincidencias_norm[0]]
+            except Exception as _exc_norm:
+                st.session_state["radar_norm_warning"] = str(_exc_norm)
+            return None
+
+        def _obtener_muestra_multicompetitoria_club(
+            eq_objetivo: str,
+            df_scope_club: pd.DataFrame,
+            df_global: pd.DataFrame,
+            cond_campo: str = "Global",
+            n_max: int = 5,
+            requiere_secundarias: bool = False,
+        ) -> tuple[pd.DataFrame, bool]:
+            """
+            Recupera la muestra de los últimos `n_max` partidos de un club para el Radar.
+            Si `requiere_secundarias` es True (tiros, córners, faltas, tarjetas) y la muestra
+            en `df_scope_club` carece de métricas secundarias ('HST', 'AST', 'HC', 'AC', 'HF', 'AF')
+            o son enteramente nulas/ceros (caso común en partidos UEFA de ESPN):
+            - Realiza un fallback canónico multicompetitorio sobre `df_global` (Liga + UEFA).
+            - Empareja el nombre del club vía coincidencia exacta, normalización o alias.
+            - Devuelve (df_muestra, es_fallback=True).
+            Si `df_scope_club` tiene datos suficientes o no requiere secundarias, devuelve
+            (df_scope_club.head(n_max), False).
+            """
+            muestra_activa = df_scope_club if df_scope_club is not None else pd.DataFrame()
+
+            necesita_fallback = False
+            if requiere_secundarias:
+                if muestra_activa.empty or len(muestra_activa) < 3:
+                    necesita_fallback = True
+                else:
+                    cols_sec = [c for c in ("HST", "AST", "HC", "AC", "HF", "AF", "HY", "AY") if c in muestra_activa.columns]
+                    if not cols_sec:
+                        necesita_fallback = True
+                    else:
+                        vals_sec = muestra_activa[cols_sec].apply(pd.to_numeric, errors="coerce").fillna(0).values
+                        if np.all(vals_sec == 0):
+                            necesita_fallback = True
+            elif muestra_activa.empty or len(muestra_activa) < 3:
+                necesita_fallback = True
+
+            if not necesita_fallback and not muestra_activa.empty:
+                return muestra_activa.head(n_max), False
+
+            # Fallback canónico sobre df_global (consolidación multicompetitoria)
+            if df_global is not None and not df_global.empty:
+                equipos_global = sorted(
+                    pd.concat([df_global["HomeTeam"], df_global["AwayTeam"]])
+                    .dropna()
+                    .astype(str)
+                    .unique()
+                    .tolist()
+                ) if {"HomeTeam", "AwayTeam"}.issubset(df_global.columns) else []
+
+                eq_canon = None
+                if eq_objetivo in equipos_global:
+                    eq_canon = eq_objetivo
+                else:
+                    eq_canon = _normalizar_y_emparejar_equipo(eq_objetivo, equipos_global)
+                    if not eq_canon:
+                        eq_raiz = _despojar_afijos_club_radar(_limpiar_texto_radar(eq_objetivo))
+                        if len(eq_raiz) >= 4:
+                            for eg in equipos_global:
+                                if eq_raiz in _limpiar_texto_radar(eg):
+                                    eq_canon = eg
+                                    break
+
+                if eq_canon:
+                    if "Local" in cond_campo:
+                        df_fb = df_global[df_global["HomeTeam"] == eq_canon]
+                    elif "Visitante" in cond_campo:
+                        df_fb = df_global[df_global["AwayTeam"] == eq_canon]
+                    else:
+                        df_fb = df_global[(df_global["HomeTeam"] == eq_canon) | (df_global["AwayTeam"] == eq_canon)]
+
+                    if len(df_fb) < 3:
+                        df_fb = df_global[(df_global["HomeTeam"] == eq_canon) | (df_global["AwayTeam"] == eq_canon)]
+
+                    if not df_fb.empty:
+                        if "Date_Parsed" in df_fb.columns and df_fb["Date_Parsed"].notna().any():
+                            df_fb = df_fb.sort_values(by="Date_Parsed", ascending=False)
+                        elif "Date" in df_fb.columns:
+                            df_fb = df_fb.sort_values(by="Date", ascending=False)
+
+                        return df_fb.head(n_max), True
+
+            return (muestra_activa.head(n_max) if not muestra_activa.empty else pd.DataFrame()), False
+
+        @st.cache_data(ttl=1800, show_spinner=False)
+        def _obtener_fixtures_vivo_radar(sport_key: str) -> list[dict]:
+            """
+            Consulta autónoma y cacheada (TTL 30 min) de partidos próximos y cuotas en vivo
+            vía `conector_odds.py` con captura total de excepciones.
+            """
+            if not sport_key:
+                return []
+            try:
+                import conector_odds as _co_local
+                if hasattr(_co_local, "_pedir_cuotas"):
+                    res = _co_local._pedir_cuotas(sport_key, "h2h,totals")
+                    if getattr(res, "status_code", 500) == 200:
+                        datos = res.json()
+                        if isinstance(datos, list):
+                            return datos
+            except Exception:
+                return []
+            return []
+
+        def _parsear_fecha_futura_radar(valor_fecha) -> tuple:
+            """
+            Parsea fechas desde ISO 8601 ('2026-10-31T15:15:00Z'), 'DD/MM/YYYY HH:MM', 'DD/MM/YYYY'
+            o Timestamp. Devuelve (fecha_date, dt_naive_orden, texto_formateado) o (None, None, '').
+            """
+            try:
+                if valor_fecha is None or (isinstance(valor_fecha, float) and pd.isna(valor_fecha)):
+                    return None, None, ""
+                raw = str(valor_fecha).strip()
+                if not raw or raw.lower() in ("nan", "nat", "none", "próxima jornada", "jornada activa", "programado"):
+                    return None, None, ""
+
+                if isinstance(valor_fecha, datetime):
+                    dt_obj = valor_fecha.replace(tzinfo=None)
+                elif hasattr(valor_fecha, "to_pydatetime"):
+                    dt_obj = valor_fecha.to_pydatetime().replace(tzinfo=None)
+                elif hasattr(valor_fecha, "year") and hasattr(valor_fecha, "month") and hasattr(valor_fecha, "day") and not hasattr(valor_fecha, "hour"):
+                    dt_obj = datetime(valor_fecha.year, valor_fecha.month, valor_fecha.day)
+                elif "T" in raw or (len(raw) >= 10 and raw[4:5] == "-" and raw[7:8] == "-"):
+                    dt_iso = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                    dt_obj = dt_iso.replace(tzinfo=None)
+                else:
+                    ts_parsed = pd.to_datetime(raw, errors="coerce", dayfirst=True)
+                    if pd.isna(ts_parsed):
+                        return None, None, ""
+                    dt_obj = ts_parsed.to_pydatetime().replace(tzinfo=None)
+
+                fecha_d = dt_obj.date()
+                if dt_obj.hour != 0 or dt_obj.minute != 0:
+                    fmt_str = dt_obj.strftime("%d/%m/%Y %H:%M")
+                else:
+                    fmt_str = dt_obj.strftime("%d/%m/%Y")
+                return fecha_d, dt_obj, fmt_str
+            except Exception:
+                return None, None, ""
+
+        def _construir_horizonte_fixtures_y_cuotas(df_scope: pd.DataFrame) -> tuple[dict, list[dict]]:
+            """
+            Motor dinámico de horizonte futuro con barrera cronológica estricta (`fecha >= hoy`)
+            y blindaje completo de excepciones para garantizar estabilidad total en Streamlit.
+            """
+            mapa_eq = {}
+            lista_duelos = []
+            vistos_duelos = set()
+
+            try:
+                hoy = datetime.now().date()
+                equipos_universo = sorted(
+                    pd.concat([df_rad_base["HomeTeam"], df_rad_base["AwayTeam"]]).dropna().astype(str).unique().tolist()
+                ) if (df_rad_base is not None and not df_rad_base.empty and {"HomeTeam", "AwayTeam"}.issubset(df_rad_base.columns)) else []
+                equipos_scope_set = set(
+                    pd.concat([df_scope["HomeTeam"], df_scope["AwayTeam"]]).dropna().astype(str).unique().tolist()
+                ) if (df_scope is not None and not df_scope.empty and {"HomeTeam", "AwayTeam"}.issubset(df_scope.columns)) else set(equipos_universo)
+
+                # Registro de partidos ya jugados (especialmente últimos 5 por equipo) para evitar duplicados jugados
+                partidos_jugados_set = set()
+                pares_recientes_u5 = set()
+                try:
+                    if df_rad_base is not None and not df_rad_base.empty and {"FTHG", "FTAG"}.issubset(df_rad_base.columns):
+                        df_jugados = df_rad_base[df_rad_base["FTHG"].notna() & df_rad_base["FTAG"].notna()].copy()
+                        if "Date" in df_jugados.columns:
+                            df_jugados["_dt_j"] = pd.to_datetime(df_jugados["Date"], errors="coerce", dayfirst=True)
+                        else:
+                            df_jugados["_dt_j"] = pd.NaT
+
+                        for _, r_j in df_jugados.dropna(subset=["_dt_j"]).iterrows():
+                            hj = str(r_j.get("HomeTeam", "")).strip()
+                            aj = str(r_j.get("AwayTeam", "")).strip()
+                            dj = r_j["_dt_j"].date()
+                            if hj and aj:
+                                partidos_jugados_set.add((hj, aj, dj))
+
+                        for eq_u in equipos_universo:
+                            sub_u5 = df_jugados[(df_jugados["HomeTeam"] == eq_u) | (df_jugados["AwayTeam"] == eq_u)].sort_values("_dt_j", ascending=False).head(5)
+                            for _, r_u5 in sub_u5.iterrows():
+                                hu = str(r_u5.get("HomeTeam", "")).strip()
+                                au = str(r_u5.get("AwayTeam", "")).strip()
+                                du = r_u5["_dt_j"].date() if pd.notna(r_u5.get("_dt_j")) else None
+                                if hu and au and du is not None:
+                                    pares_recientes_u5.add((hu, au, du))
+                except Exception as _exc_hist:
+                    st.session_state["radar_hist_warning"] = str(_exc_hist)
+
+                candidatos_futuros = []
+
+                def _registrar_candidato_futuro(h_raw: str, a_raw: str, raw_fecha, mercados_dict: dict | None = None, div_code: str = "", fila_bd=None):
+                    try:
+                        fecha_d, dt_ord, f_fmt = _parsear_fecha_futura_radar(raw_fecha)
+                        # BARRERA CRONOLÓGICA ESTRICTA: descartar inmediatamente si no tiene fecha válida o si fecha < hoy
+                        if fecha_d is None or dt_ord is None or fecha_d < hoy:
+                            return
+                        h_canon = _normalizar_y_emparejar_equipo(h_raw, equipos_universo)
+                        a_canon = _normalizar_y_emparejar_equipo(a_raw, equipos_universo)
+                        if not h_canon or not a_canon or h_canon == a_canon:
+                            return
+                        if equipos_scope_set and (h_canon not in equipos_scope_set and a_canon not in equipos_scope_set):
+                            return
+                        if (h_canon, a_canon, fecha_d) in partidos_jugados_set or (h_canon, a_canon, fecha_d) in pares_recientes_u5:
+                            return
+
+                        candidatos_futuros.append({
+                            "local": h_canon,
+                            "visitante": a_canon,
+                            "fecha_date": fecha_d,
+                            "dt_ord": dt_ord,
+                            "fecha_str": f_fmt,
+                            "cuotas_api": dict(mercados_dict or {}),
+                            "div": str(div_code or ""),
+                            "fila_bd": fila_bd,
+                        })
+                    except Exception:
+                        return
+
+                # 1) Obtención autónoma de próximos partidos en vivo vía conector_odds.py (con caché segura en session_state)
+                try:
+                    mapa_div_sport = {
+                        "SP1": "soccer_spain_la_liga",
+                        "SP2": "soccer_spain_segunda_division",
+                        "E0": "soccer_epl",
+                        "E1": "soccer_efl_champ",
+                        "D1": "soccer_germany_bundesliga",
+                        "I1": "soccer_italy_serie_a",
+                        "F1": "soccer_france_ligue_one",
+                    }
+                    if liga_rad_sel != "Todas las Competiciones":
+                        div_sel_code = MAPA_INV.get(liga_rad_sel, "SP1")
+                        divs_activas_api = [div_sel_code] if div_sel_code in mapa_div_sport else ["SP1"]
+                    else:
+                        divs_activas_api = [d for d in divs_disp_rad if d in mapa_div_sport] or ["SP1", "E0", "D1", "I1", "F1"]
+
+                    if "radar_live_fixtures_cache" not in st.session_state or not isinstance(st.session_state.get("radar_live_fixtures_cache"), dict):
+                        st.session_state["radar_live_fixtures_cache"] = {}
+                    cache_live_ss = st.session_state["radar_live_fixtures_cache"]
+
+                    for d_code in divs_activas_api:
+                        s_key = mapa_div_sport.get(d_code)
+                        if not s_key:
+                            continue
+                        if s_key not in cache_live_ss:
+                            try:
+                                eventos_liga = _obtener_fixtures_vivo_radar(s_key)
+                                cache_live_ss[s_key] = eventos_liga if isinstance(eventos_liga, list) else []
+                            except Exception as _exc_api_call:
+                                st.session_state["radar_api_warning"] = f"Aviso API ({s_key}): {_exc_api_call}"
+                                cache_live_ss[s_key] = []
+                        else:
+                            eventos_liga = cache_live_ss.get(s_key, [])
+
+                        for ev_p in (eventos_liga or []):
+                            try:
+                                if not isinstance(ev_p, dict):
+                                    continue
+                                loc_api = ev_p.get("home_team", "")
+                                vis_api = ev_p.get("away_team", "")
+                                commence_raw = ev_p.get("commence_time", "")
+                                if not loc_api or not vis_api or not commence_raw:
+                                    continue
+
+                                mercados_ev = {}
+                                cuotas_o25, cuotas_btts, cuotas_h, cuotas_a = [], [], [], []
+                                for bm in ev_p.get("bookmakers", []):
+                                    if not isinstance(bm, dict):
+                                        continue
+                                    for mk in bm.get("markets", []):
+                                        if not isinstance(mk, dict):
+                                            continue
+                                        mkey = mk.get("key")
+                                        if mkey == "totals":
+                                            for outc in mk.get("outcomes", []):
+                                                if isinstance(outc, dict) and outc.get("name") == "Over" and outc.get("point") == 2.5:
+                                                    pr = pd.to_numeric(outc.get("price"), errors="coerce")
+                                                    if pd.notna(pr) and pr > 1.01:
+                                                        cuotas_o25.append(float(pr))
+                                        elif mkey == "btts":
+                                            for outc in mk.get("outcomes", []):
+                                                if isinstance(outc, dict) and outc.get("name") == "Yes":
+                                                    pr = pd.to_numeric(outc.get("price"), errors="coerce")
+                                                    if pd.notna(pr) and pr > 1.01:
+                                                        cuotas_btts.append(float(pr))
+                                        elif mkey == "h2h":
+                                            for outc in mk.get("outcomes", []):
+                                                if isinstance(outc, dict):
+                                                    pr = pd.to_numeric(outc.get("price"), errors="coerce")
+                                                    if pd.notna(pr) and pr > 1.01:
+                                                        if outc.get("name") == loc_api:
+                                                            cuotas_h.append(float(pr))
+                                                        elif outc.get("name") == vis_api:
+                                                            cuotas_a.append(float(pr))
+
+                                if cuotas_o25:
+                                    mercados_ev["🔥 Más de 2.5 Goles"] = round(float(np.mean(cuotas_o25)), 2)
+                                if cuotas_btts:
+                                    mercados_ev["🎯 Ambos Marcan (Sí)"] = round(float(np.mean(cuotas_btts)), 2)
+                                if cuotas_h:
+                                    mercados_ev["Victoria Local (1)"] = round(float(np.mean(cuotas_h)), 2)
+                                if cuotas_a:
+                                    mercados_ev["Victoria Visitante (2)"] = round(float(np.mean(cuotas_a)), 2)
+
+                                _registrar_candidato_futuro(loc_api, vis_api, commence_raw, mercados_ev, div_code=d_code)
+                            except Exception:
+                                continue
+                except Exception as _exc_live_block:
+                    st.session_state["radar_api_warning"] = f"Aviso en sincronización de calendario en vivo: {_exc_live_block}"
+
+                # 2) Cruce con caché de oportunidades del Escáner EV+ (si existe en sesión y supera fecha >= hoy)
+                try:
+                    df_ops_cache = st.session_state.get("df_ops_export")
+                    if isinstance(df_ops_cache, pd.DataFrame) and not df_ops_cache.empty and "Partido" in df_ops_cache.columns:
+                        agrup_ops = {}
+                        for _, r_op in df_ops_cache.iterrows():
+                            p_txt = str(r_op.get("Partido", ""))
+                            if " vs " in p_txt:
+                                h_op, a_op = [x.strip() for x in p_txt.split(" vs ", 1)]
+                                f_op = r_op.get("Fecha / Hora", "")
+                                m_op = str(r_op.get("Mercado", ""))
+                                c_op = pd.to_numeric(r_op.get("Cuota"), errors="coerce")
+                                agrup_ops.setdefault((h_op, a_op, str(f_op)), {})
+                                if pd.notna(c_op) and c_op > 1.01:
+                                    agrup_ops[(h_op, a_op, str(f_op))][m_op] = float(c_op)
+                        for (h_op, a_op, f_op_str), mercs_op in agrup_ops.items():
+                            _registrar_candidato_futuro(h_op, a_op, f_op_str, mercs_op)
+                except Exception:
+                    pass
+
+                # 3) Fixtures manuales cargados en sesión (solo si fecha >= hoy)
+                try:
+                    for fx_m in st.session_state.get("ev_fix_manual", []):
+                        if isinstance(fx_m, dict):
+                            _registrar_candidato_futuro(
+                                fx_m.get("Local", ""),
+                                fx_m.get("Visitante", ""),
+                                fx_m.get("Fecha"),
+                                {},
+                                div_code=str(fx_m.get("Div", "")),
+                            )
+                except Exception:
+                    pass
+
+                # 4) Partidos programados sin disputar en BD (estrictamente FTHG.isna() y fecha >= hoy)
+                try:
+                    if df_scope is not None and not df_scope.empty and "FTHG" in df_scope.columns:
+                        col_fecha_bd = "Date_Parsed" if "Date_Parsed" in df_scope.columns else ("Date" if "Date" in df_scope.columns else None)
+                        if col_fecha_bd:
+                            df_no_jug = df_scope[
+                                df_scope["FTHG"].isna()
+                                & df_scope["HomeTeam"].notna()
+                                & df_scope["AwayTeam"].notna()
+                                & df_scope[col_fecha_bd].notna()
+                            ].copy()
+                            for _, r_hz in df_no_jug.iterrows():
+                                _registrar_candidato_futuro(
+                                    str(r_hz.get("HomeTeam", "")),
+                                    str(r_hz.get("AwayTeam", "")),
+                                    r_hz.get(col_fecha_bd),
+                                    {},
+                                    div_code=str(r_hz.get(col_div_rad, "")) if col_div_rad else "",
+                                    fila_bd=r_hz,
+                                )
+                except Exception:
+                    pass
+
+                # Ordenar cronológicamente (commence_time ascendente) para enlazar a cada equipo con su próximo partido inmediato
+                candidatos_futuros.sort(key=lambda x: x["dt_ord"])
+
+                for cand in candidatos_futuros:
+                    try:
+                        h_c = cand["local"]
+                        a_c = cand["visitante"]
+                        f_str = cand["fecha_str"]
+                        cuotas_c = cand["cuotas_api"]
+
+                        es_inmediato_h = h_c not in mapa_eq
+                        es_inmediato_a = a_c not in mapa_eq
+
+                        if es_inmediato_h:
+                            mapa_eq[h_c] = {
+                                "rival": a_c,
+                                "condicion": "Local",
+                                "etiqueta": f"vs {a_c} [Local]",
+                                "fecha": f_str,
+                                "fila_bd": cand.get("fila_bd"),
+                                "cuotas_api": cuotas_c,
+                            }
+                        elif cuotas_c and not mapa_eq[h_c].get("cuotas_api") and mapa_eq[h_c].get("rival") == a_c:
+                            mapa_eq[h_c]["cuotas_api"] = cuotas_c
+
+                        if es_inmediato_a:
+                            mapa_eq[a_c] = {
+                                "rival": h_c,
+                                "condicion": "Visitante",
+                                "etiqueta": f"vs {h_c} [Visitante]",
+                                "fecha": f_str,
+                                "fila_bd": cand.get("fila_bd"),
+                                "cuotas_api": cuotas_c,
+                            }
+                        elif cuotas_c and not mapa_eq[a_c].get("cuotas_api") and mapa_eq[a_c].get("rival") == h_c:
+                            mapa_eq[a_c]["cuotas_api"] = cuotas_c
+
+                        if (es_inmediato_h or es_inmediato_a) and (h_c, a_c) not in vistos_duelos:
+                            vistos_duelos.add((h_c, a_c))
+                            lista_duelos.append({
+                                "local": h_c,
+                                "visitante": a_c,
+                                "fecha": f_str,
+                                "div": cand["div"],
+                            })
+                    except Exception:
+                        continue
+            except Exception as _exc_horiz:
+                st.session_state["radar_horizon_warning"] = f"Aviso en motor de horizonte: {_exc_horiz}"
+                return {}, []
+
+            return mapa_eq, lista_duelos
+
+        _MAPA_CLAVE_LEGADA_RADAR = {
+            "OVER25": ("⚽ Goles Totales", "Más de 2.5"),
+            "BTTS": ("🎯 Ambos Marcan (BTTS)", "Ambos Marcan: SÍ"),
+            "HT05": ("⏱️ Goles 1ª / 2ª Parte", "Más de 0.5 (1ªP)"),
+            "CORNERS85": ("🚩 Córners Totales", "Más de 8.5"),
+            "CARDS45": ("🟨 Fricción Disciplinaria (Tarjetas)", "Más de 4.5"),
+            "ATS": ("🛡️ Hándicap Asiático Cubierto (ATS)", "Línea Cubierta"),
+        }
+
+        def _resolver_par_mercado_radar(clave_o_cat, linea_opt: str | None = None) -> tuple[str, str]:
+            if isinstance(clave_o_cat, tuple) and len(clave_o_cat) == 2:
+                return str(clave_o_cat[0]), str(clave_o_cat[1])
+            if linea_opt is not None:
+                return str(clave_o_cat), str(linea_opt)
+            s_key = str(clave_o_cat)
+            if s_key in _MAPA_CLAVE_LEGADA_RADAR:
+                return _MAPA_CLAVE_LEGADA_RADAR[s_key]
+            if "||" in s_key:
+                c_p, l_p = s_key.split("||", 1)
+                return c_p.strip(), l_p.strip()
+            return ("⚽ Goles Totales", "Más de 2.5")
+
+        def _parsear_linea_umbral_radar(linea_str: str, default_val: float = 2.5) -> tuple[str, float]:
+            s_lin = str(linea_str or "")
+            op = "<" if "Menos de" in s_lin else ">"
+            m_num = re.search(r"(\d+(?:\.\d+)?)", s_lin)
+            umbral = float(m_num.group(1)) if m_num else float(default_val)
+            return op, umbral
+
+        def evaluate_streak_condition(partido, mercado_cat_in: str, linea_activa_in: str, eq: str = "") -> tuple[bool, bool, str]:
+            """
+            Evalúa dinámicamente mediante operadores matemáticos ('>' / '<') si `partido`
+            cumple la condición definida por `(mercado_cat_in, linea_activa_in)`.
+            Devuelve `(es_valido, hit_bool, etiqueta_extra)`.
+            """
+            fthg = pd.to_numeric(partido.get("FTHG"), errors="coerce")
+            ftag = pd.to_numeric(partido.get("FTAG"), errors="coerce")
+            if pd.isna(fthg) or pd.isna(ftag):
+                return False, False, ""
+
+            ft_goals = float(fthg + ftag)
+            op, umbral = _parsear_linea_umbral_radar(linea_activa_in, 2.5)
+            es_loc = str(partido.get("HomeTeam", "")).strip() == str(eq).strip()
+
+            if "Goles Totales" in mercado_cat_in:
+                hit = (ft_goals > umbral) if op == ">" else (ft_goals < umbral)
+                return True, bool(hit), ""
+
+            if "Goles 1ª / 2ª Parte" in mercado_cat_in:
+                hthg = pd.to_numeric(partido.get("HTHG"), errors="coerce")
+                htag = pd.to_numeric(partido.get("HTAG"), errors="coerce")
+                if pd.isna(hthg) or pd.isna(htag):
+                    return False, False, ""
+                ht_goals = float(hthg + htag)
+                if "2ªP" in linea_activa_in:
+                    g2t = ft_goals - ht_goals
+                    hit = (g2t > umbral) if op == ">" else (g2t < umbral)
+                    g2_h = max(0, int(fthg - hthg))
+                    g2_a = max(0, int(ftag - htag))
+                    return True, bool(hit), f" 2T:{g2_h}-{g2_a}"
+                hit = (ht_goals > umbral) if op == ">" else (ht_goals < umbral)
+                return True, bool(hit), f" HT:{int(hthg)}-{int(htag)}"
+
+            if "Córners" in mercado_cat_in:
+                hc = pd.to_numeric(partido.get("HC"), errors="coerce")
+                ac = pd.to_numeric(partido.get("AC"), errors="coerce")
+                if pd.isna(hc) or pd.isna(ac):
+                    return False, False, ""
+                tot_c = int(hc + ac)
+                hit = (float(tot_c) > umbral) if op == ">" else (float(tot_c) < umbral)
+                return True, bool(hit), f" {tot_c}C"
+
+            if "Tarjetas" in mercado_cat_in or "Fricción Disciplinaria" in mercado_cat_in:
+                hy = pd.to_numeric(partido.get("HY"), errors="coerce")
+                ay = pd.to_numeric(partido.get("AY"), errors="coerce")
+                hr = pd.to_numeric(partido.get("HR"), errors="coerce")
+                ar = pd.to_numeric(partido.get("AR"), errors="coerce")
+                if pd.isna(hy) or pd.isna(ay):
+                    return False, False, ""
+                tot_t = int(hy + ay + (0 if pd.isna(hr) else hr) + (0 if pd.isna(ar) else ar))
+                hit = (float(tot_t) > umbral) if op == ">" else (float(tot_t) < umbral)
+                return True, bool(hit), f" {tot_t}T"
+
+            if "Ambos Marcan" in mercado_cat_in or "BTTS" in mercado_cat_in:
+                btts_si = (fthg > 0) and (ftag > 0)
+                es_no = "NO" in str(linea_activa_in).upper()
+                hit = (not btts_si) if es_no else btts_si
+                return True, bool(hit), ""
+
+            if "Hándicap Asiático" in mercado_cat_in or "ATS" in mercado_cat_in:
+                gf = int(float(fthg if es_loc else ftag))
+                ga = int(float(ftag if es_loc else fthg))
+                ah_raw = pd.to_numeric(partido.get("AHh"), errors="coerce")
+                if pd.isna(ah_raw):
+                    ah_raw = pd.to_numeric(partido.get("AHCh"), errors="coerce")
+                if pd.isna(ah_raw):
+                    ah_raw = -0.25
+                linea_eq = float(ah_raw) if es_loc else -float(ah_raw)
+                diff_ats = (gf + linea_eq) - ga
+                hit = False if abs(diff_ats) < 1e-6 else (diff_ats > 0.0)
+                return True, bool(hit), f" AH{linea_eq:+.2g}"
+
+            if "Goles Individuales de Equipo" in mercado_cat_in or "Goles Individuales" in mercado_cat_in:
+                gf = float(fthg if es_loc else ftag)
+                if "0.5" in linea_activa_in:
+                    hit = (gf > 0)
+                elif "1.5" in linea_activa_in:
+                    hit = (gf >= 2)
+                elif "2.5" in linea_activa_in:
+                    hit = (gf >= 3)
+                else:
+                    hit = (gf > umbral) if op == ">" else (gf < umbral)
+                return True, bool(hit), f" {int(gf)}G"
+
+            if "Tiros y Tiros a Puerta" in mercado_cat_in or "SOT" in mercado_cat_in:
+                hs = pd.to_numeric(partido.get("HS"), errors="coerce")
+                as_ = pd.to_numeric(partido.get("AS"), errors="coerce")
+                hst = pd.to_numeric(partido.get("HST"), errors="coerce")
+                ast_ = pd.to_numeric(partido.get("AST"), errors="coerce")
+
+                if "23.5" in linea_activa_in or "Tiros Totales" in linea_activa_in:
+                    if pd.isna(hs) or pd.isna(as_):
+                        return False, False, ""
+                    tot_s = float(hs + as_)
+                    hit = tot_s > 23.5
+                    return True, bool(hit), f" {int(tot_s)}T"
+
+                if "8.5" in linea_activa_in:
+                    if pd.isna(hst) or pd.isna(ast_):
+                        return False, False, ""
+                    tot_sot = float(hst + ast_)
+                    hit = tot_sot > 8.5
+                    return True, bool(hit), f" {int(tot_sot)}SOT"
+
+                if "Individual" in linea_activa_in or "4.5" in linea_activa_in:
+                    if pd.isna(hst) or pd.isna(ast_):
+                        return False, False, ""
+                    sot_ind = float(hst if es_loc else ast_)
+                    hit = sot_ind >= 5
+                    return True, bool(hit), f" {int(sot_ind)}SOT"
+
+            if "Fricción de Faltas" in mercado_cat_in or "Faltas" in mercado_cat_in:
+                hf = pd.to_numeric(partido.get("HF"), errors="coerce")
+                af = pd.to_numeric(partido.get("AF"), errors="coerce")
+                if pd.isna(hf) or pd.isna(af):
+                    return False, False, ""
+                tot_f = float(hf + af)
+                if "22.5" in linea_activa_in:
+                    hit = tot_f > 22.5
+                elif "26.5" in linea_activa_in:
+                    hit = tot_f > 26.5
+                else:
+                    hit = tot_f > 24.5
+                return True, bool(hit), f" {int(tot_f)}F"
+
+            if "Portería a Cero" in mercado_cat_in or "Clean Sheet" in mercado_cat_in:
+                ga = int(float(ftag if es_loc else fthg))
+                if "Recibe" in linea_activa_in or "Concede" in linea_activa_in:
+                    hit = (ga > 0)
+                else:
+                    hit = (ga == 0)
+                return True, bool(hit), f" Enc:{ga}"
+
+            if "Doble Oportunidad" in mercado_cat_in:
+                ftr = str(partido.get("FTR") or "").strip().upper()
+                if ftr not in ("H", "D", "A"):
+                    ftr = "H" if fthg > ftag else ("A" if ftag > fthg else "D")
+                if "1X + Más de 1.5" in linea_activa_in:
+                    hit = (ftr in ["H", "D"]) and (ft_goals >= 2)
+                elif "X2 + Más de 1.5" in linea_activa_in:
+                    hit = (ftr in ["D", "A"]) and (ft_goals >= 2)
+                elif "1X + Menos de 4.5" in linea_activa_in:
+                    hit = (ftr in ["H", "D"]) and (ft_goals <= 4)
+                else:
+                    hit = (ftr in ["H", "D"]) and (ft_goals >= 2)
+                return True, bool(hit), f" {ftr}:{int(fthg)}-{int(ftag)}"
+
+            return False, False, ""
+
+        def _prior_bayesiano_linea_radar(cat_m: str, lin_m: str) -> tuple[float, float]:
+            op, umbral = _parsear_linea_umbral_radar(lin_m, 2.5)
+            if "Goles Totales" in cat_m:
+                mapa_p = {1.5: 0.74, 2.5: 0.52, 3.5: 0.30, 4.5: 0.14}
+                p_over = mapa_p.get(umbral, 0.52)
+                p0 = p_over if op == ">" else (1.0 - p_over)
+                return round(p0 * 5.0, 2), round((1.0 - p0) * 5.0, 2)
+            if "Goles 1ª / 2ª Parte" in cat_m:
+                if "2ªP" in lin_m:
+                    p_over = 0.76 if umbral <= 0.5 else 0.44
+                else:
+                    p_over = 0.68 if umbral <= 0.5 else 0.32
+                p0 = p_over if op == ">" else (1.0 - p_over)
+                return round(p0 * 5.0, 2), round((1.0 - p0) * 5.0, 2)
+            if "Córners" in cat_m:
+                mapa_c = {6.5: 0.78, 7.5: 0.66, 8.5: 0.52, 9.5: 0.42, 10.5: 0.31}
+                p_over = mapa_c.get(umbral, 0.52)
+                p0 = p_over if op == ">" else (1.0 - p_over)
+                return round(p0 * 5.0, 2), round((1.0 - p0) * 5.0, 2)
+            if "Tarjetas" in cat_m or "Fricción Disciplinaria" in cat_m:
+                mapa_t = {3.5: 0.66, 4.5: 0.50, 5.5: 0.35, 6.5: 0.22}
+                p_over = mapa_t.get(umbral, 0.50)
+                p0 = p_over if op == ">" else (1.0 - p_over)
+                return round(p0 * 5.0, 2), round((1.0 - p0) * 5.0, 2)
+            if "Goles Individuales" in cat_m:
+                mapa_gi = {0.5: 0.76, 1.5: 0.44, 2.5: 0.18}
+                p0 = mapa_gi.get(umbral, 0.44)
+                return round(p0 * 5.0, 2), round((1.0 - p0) * 5.0, 2)
+            if "Tiros" in cat_m or "SOT" in cat_m:
+                p0 = 0.50
+                return round(p0 * 5.0, 2), round((1.0 - p0) * 5.0, 2)
+            if "Faltas" in cat_m:
+                mapa_f = {22.5: 0.62, 24.5: 0.48, 26.5: 0.35}
+                p0 = mapa_f.get(umbral, 0.48)
+                return round(p0 * 5.0, 2), round((1.0 - p0) * 5.0, 2)
+            if "Portería a Cero" in cat_m or "Clean Sheet" in cat_m:
+                p0 = 0.68 if ("Recibe" in lin_m or "Concede" in lin_m) else 0.32
+                return round(p0 * 5.0, 2), round((1.0 - p0) * 5.0, 2)
+            if "Doble Oportunidad" in cat_m:
+                p0 = 0.64 if "Menos" in lin_m else 0.52
+                return round(p0 * 5.0, 2), round((1.0 - p0) * 5.0, 2)
+            return 2.5, 2.5
+
+        def _estimar_cuota_mercado_radar(u5_df: pd.DataFrame, eq: str, clave_mercado, info_fix: dict | None, linea_opt: str | None = None) -> float:
+            """
+            Extrae la cuota decimal de mercado desde la caché de cuotas en vivo o desde las columnas
+            históricas reales de `macro_base_futbol.db`, calibrando dinámicamente según categoría y línea.
+            """
+            cat_m, lin_m = _resolver_par_mercado_radar(clave_mercado, linea_opt)
+            op, umbral = _parsear_linea_umbral_radar(lin_m, 2.5)
+            cuotas_api = (info_fix or {}).get("cuotas_api") or {}
+
+            if "Goles Totales" in cat_m:
+                if umbral == 2.5 and op == ">":
+                    for k_api, v_api in cuotas_api.items():
+                        if "2.5" in k_api and ("Más" in k_api or "Over" in k_api):
+                            return round(float(v_api), 2)
+                base_o25 = 1.85
+                for col_c in ("Max>2.5", "Avg>2.5", "B365>2.5"):
+                    if col_c in u5_df.columns:
+                        s_c = pd.to_numeric(u5_df[col_c], errors="coerce").dropna()
+                        if not s_c.empty:
+                            base_o25 = float(s_c.iloc[0])
+                            break
+                if umbral == 2.5 and op == ">":
+                    return round(base_o25, 2)
+                p_o25 = np.clip(0.95 / max(base_o25, 1.15), 0.20, 0.80)
+                escala_g = {1.5: 1.36, 2.5: 1.00, 3.5: 0.62, 4.5: 0.34}.get(umbral, 1.00)
+                p_over_lin = float(np.clip(p_o25 * escala_g, 0.14, 0.84))
+                p_sel = p_over_lin if op == ">" else (1.0 - p_over_lin)
+                return round(float(np.clip(0.95 / max(p_sel, 0.12), 1.22, 3.60)), 2)
+
+            if "Ambos Marcan" in cat_m or "BTTS" in cat_m:
+                es_no = "NO" in lin_m.upper()
+                if not es_no:
+                    for k_api, v_api in cuotas_api.items():
+                        if "Ambos" in k_api or "BTTS" in k_api:
+                            return round(float(v_api), 2)
+                base_btts_si = 1.80
+                for col_c in ("Avg>2.5", "B365>2.5"):
+                    if col_c in u5_df.columns:
+                        s_c = pd.to_numeric(u5_df[col_c], errors="coerce").dropna()
+                        if not s_c.empty:
+                            base_btts_si = float(np.clip(s_c.mean() * 0.96, 1.55, 2.25))
+                            break
+                if not es_no:
+                    return round(base_btts_si, 2)
+                p_si = np.clip(0.95 / max(base_btts_si, 1.20), 0.25, 0.75)
+                return round(float(np.clip(0.95 / max(1.0 - p_si, 0.20), 1.45, 2.55)), 2)
+
+            if "Goles 1ª / 2ª Parte" in cat_m:
+                base_ht05 = 1.42
+                for col_c in ("Avg>2.5", "B365>2.5"):
+                    if col_c in u5_df.columns:
+                        s_c = pd.to_numeric(u5_df[col_c], errors="coerce").dropna()
+                        if not s_c.empty:
+                            base_ht05 = float(np.clip(s_c.mean() * 0.76, 1.30, 1.72))
+                            break
+                if "1ªP" in lin_m and umbral <= 0.5 and op == ">":
+                    return round(base_ht05, 2)
+                alpha_p, beta_p = _prior_bayesiano_linea_radar(cat_m, lin_m)
+                p_base = alpha_p / (alpha_p + beta_p)
+                return round(float(np.clip(0.95 / max(p_base, 0.15), 1.25, 3.10)), 2)
+
+            if "Córners" in cat_m:
+                c_med = 9.5
+                if {"HC", "AC"}.issubset(u5_df.columns):
+                    c_med = float((u5_df["HC"].fillna(0) + u5_df["AC"].fillna(0)).mean())
+                diff_c = (c_med - (umbral + 1.0)) if op == ">" else ((umbral + 1.0) - c_med)
+                c_mkt = 1.85 - np.clip(diff_c * 0.06, -0.30, 0.30)
+                return round(float(np.clip(c_mkt, 1.38, 2.55)), 2)
+
+            if "Tarjetas" in cat_m or "Fricción Disciplinaria" in cat_m:
+                t_med = 4.7
+                if {"HY", "AY"}.issubset(u5_df.columns):
+                    t_med = float((u5_df["HY"].fillna(0) + u5_df["AY"].fillna(0) + u5_df.get("HR", 0).fillna(0) + u5_df.get("AR", 0).fillna(0)).mean())
+                diff_t = (t_med - (umbral + 0.2)) if op == ">" else ((umbral + 0.2) - t_med)
+                c_mkt = 1.90 - np.clip(diff_t * 0.07, -0.32, 0.32)
+                return round(float(np.clip(c_mkt, 1.40, 2.60)), 2)
+
+            if "Hándicap Asiático" in cat_m or "ATS" in cat_m:
+                cuotas_ats = []
+                for _, r_u in u5_df.iterrows():
+                    es_loc = str(r_u.get("HomeTeam", "")) == eq
+                    col_pref = ("MaxAHH", "AvgAHH", "B365AHH") if es_loc else ("MaxAHA", "AvgAHA", "B365AHA")
+                    for c_ah in col_pref:
+                        val_c = pd.to_numeric(r_u.get(c_ah), errors="coerce")
+                        if pd.notna(val_c) and val_c > 1.01:
+                            cuotas_ats.append(float(val_c))
+                            break
+                if cuotas_ats:
+                    return round(float(cuotas_ats[0]), 2)
+                return 1.92
+
+            if "Goles Individuales" in cat_m:
+                if "0.5" in lin_m:
+                    return 1.30
+                elif "2.5" in lin_m:
+                    return 3.50
+                return 1.85
+
+            if "Tiros" in cat_m or "SOT" in cat_m:
+                return 1.85
+
+            if "Faltas" in cat_m:
+                if "22.5" in lin_m:
+                    return 1.62
+                elif "26.5" in lin_m:
+                    return 2.35
+                return 1.88
+
+            if "Portería a Cero" in cat_m or "Clean Sheet" in cat_m:
+                if "Recibe" in lin_m or "Concede" in lin_m:
+                    return 1.45
+                return 2.65
+
+            if "Doble Oportunidad" in cat_m:
+                if "Menos" in lin_m:
+                    return 1.52
+                return 1.80
+
+            return 1.85
+
+        def _evaluar_racha_equipo_mercado(
+            u5_df: pd.DataFrame,
+            eq: str,
+            clave_mercado,
+            info_fix: dict | None,
+            liga_eq: str,
+            linea_opt: str | None = None,
+            es_fallback: bool = False,
+        ) -> dict | None:
+            """
+            Evalúa los últimos N partidos (u5_df) de `eq` en `(mercado_cat, linea_activa)` usando
+            `evaluate_streak_condition`. Genera tokens granulares `[GF-GA vs RIV]` con estilo pill,
+            calcula Cuota Justa Bayesiana Zero-Vig, Cuota Mercado y EV% Spread.
+            Si `es_fallback` es True (consolidación de temporada Liga + UEFA), añade la indicación
+            visual '(Muestra Temporada)'.
+            """
+            if u5_df is None or len(u5_df) < 3:
+                return None
+
+            cat_eval, lin_eval = _resolver_par_mercado_radar(clave_mercado, linea_opt)
+            aciertos_bool = []
+            tokens_html = []
+            tokens_texto = []
+
+            for _, fila in u5_df.iterrows():
+                es_loc = str(fila.get("HomeTeam", "")) == eq
+                rival = str(fila.get("AwayTeam", "") if es_loc else fila.get("HomeTeam", ""))
+                abrev = _abrev_rival_radar(rival)
+                fthg = pd.to_numeric(fila.get("FTHG"), errors="coerce")
+                ftag = pd.to_numeric(fila.get("FTAG"), errors="coerce")
+                if pd.isna(fthg) or pd.isna(ftag):
+                    continue
+                gf = int(float(fthg if es_loc else ftag))
+                ga = int(float(ftag if es_loc else fthg))
+
+                es_valido, hit, etiqueta_extra = evaluate_streak_condition(fila, cat_eval, lin_eval, eq=eq)
+                if not es_valido:
+                    continue
+
+                aciertos_bool.append(bool(hit))
+                token_str = f"[{gf}-{ga} vs {abrev}{etiqueta_extra}]"
+                tokens_texto.append(f"{'✅' if hit else '❌'}{token_str}")
+                clase_pill = "pill-win" if hit else "pill-loss"
+                tokens_html.append(f"<span class='{clase_pill}'>{_html_rad.escape(token_str)}</span>")
+
+            n_eval = len(aciertos_bool)
+            if n_eval < 3:
+                return None
+
+            n_hits = int(sum(aciertos_bool))
+            winrate_pct = (n_hits / n_eval) * 100.0
+
+            # Calibración inferencial Bayesiana Beta-Binomial conjugada: P_calibrated = (k + alpha) / (N + alpha + beta)
+            alpha_p, beta_p = _prior_bayesiano_linea_radar(cat_eval, lin_eval)
+            p_calibrated_raw = (float(n_hits) + alpha_p) / (float(n_eval) + alpha_p + beta_p)
+            # Cota programática estricta: P_calibrated <= 0.88 y Cuota Justa >= 1.14
+            p_calibrated = float(np.clip(p_calibrated_raw, 0.05, 0.88))
+            cuota_justa = max(1.14, round(1.0 / p_calibrated, 2))
+            cuota_mercado = _estimar_cuota_mercado_radar(u5_df, eq, (cat_eval, lin_eval), info_fix)
+            ev_pct = round(((p_calibrated * float(cuota_mercado)) - 1.0) * 100.0, 1)
+
+            if info_fix:
+                prox_rival_lbl = info_fix.get("etiqueta", "Sin emparejamiento próximo")
+                prox_fecha_lbl = info_fix.get("fecha", "")
+                prox_html = (
+                    f"<span class='pill-fixture'>🗓️ {_html_rad.escape(prox_rival_lbl)}"
+                    + (f" · <span style='color:#38bdf8;'>{_html_rad.escape(prox_fecha_lbl)}</span>" if prox_fecha_lbl else "")
+                    + "</span>"
+                )
+                prox_plano = f"{prox_rival_lbl} ({prox_fecha_lbl})" if prox_fecha_lbl else prox_rival_lbl
+            else:
+                prox_html = "<span class='pill-fixture-none'>Sin emparejamiento próximo</span>"
+                prox_plano = "Sin emparejamiento próximo"
+
+            if ev_pct > 5.0:
+                ev_badge_html = f"<span class='pill-ev-high'>🔥 {ev_pct:+.1f}% (EV+)</span>"
+            elif ev_pct >= -5.0:
+                ev_badge_html = f"<span class='pill-ev-cyan'>⚖️ {ev_pct:+.1f}% (En Línea)</span>"
+            else:
+                ev_badge_html = f"<span class='pill-ev-neg'>⚠️ {ev_pct:+.1f}% (Sobrevalorado)</span>"
+
+            forma_html = "".join(tokens_html)
+            forma_texto = " ".join(tokens_texto)
+            if es_fallback:
+                forma_html += " <span style='color:#38bdf8; font-size:0.72rem; font-weight:600;'>(Muestra Temporada)</span>"
+                forma_texto += " (Muestra Temporada)"
+
+            return {
+                "Equipo": eq,
+                "Liga": liga_eq,
+                "Aciertos_Num": n_hits,
+                "Muestra_Num": n_eval,
+                "Aciertos": f"{n_hits}/{n_eval}",
+                "Winrate_Num": round(winrate_pct, 1),
+                "Winrate": f"{winrate_pct:.0f}%",
+                "Prob_Calibrada": p_calibrated,
+                "Cuota_Justa": cuota_justa,
+                "Cuota_Mercado": cuota_mercado,
+                "EV_Num": ev_pct,
+                "EV_Badge_HTML": ev_badge_html,
+                "Proximo_HTML": prox_html,
+                "Proximo_Plano": prox_plano,
+                "Forma_HTML": forma_html,
+                "Forma_Texto": forma_texto,
+                "Es_Fallback": es_fallback,
+            }
+
+        def _renderizar_tabla_oscura_radar(lista_items: list[dict]):
+            if not lista_items:
+                st.info("Sin rachas que superen el umbral seleccionado en este mercado.")
+                return
+            ordenados = sorted(lista_items, key=lambda x: (x["Winrate_Num"], x["EV_Num"]), reverse=True)
+            filas_tr = []
+            for item in ordenados:
+                wr_color = "#00d26a" if item["Winrate_Num"] >= 80.0 else "#38bdf8"
+                filas_tr.append(
+                    "<tr>"
+                    f"<td style='font-weight:700; color:#f8fafc;'>⚽ {_html_rad.escape(item['Equipo'])} "
+                    f"<span style='font-size:0.74rem; color:#64748b; font-weight:500;'>({_html_rad.escape(item['Liga'])})</span></td>"
+                    f"<td>{item['Proximo_HTML']}</td>"
+                    f"<td style='font-family:monospace; font-weight:700; color:{wr_color};'>{item['Aciertos']} ({item['Winrate']})</td>"
+                    f"<td>{item['Forma_HTML']}</td>"
+                    f"<td style='font-family:monospace; font-weight:700; color:#e2e8f0;'>{item['Cuota_Justa']:.2f}</td>"
+                    f"<td style='font-family:monospace; font-weight:700; color:#38bdf8;'>{item['Cuota_Mercado']:.2f}</td>"
+                    f"<td>{item['EV_Badge_HTML']}</td>"
+                    "</tr>"
+                )
+            html_tabla = (
+                "<div class='radar-dark-table-wrap'>"
+                "<table class='radar-dark-table'>"
+                "<thead><tr>"
+                "<th>Equipo / Competición</th>"
+                "<th>Próximo Emparejamiento</th>"
+                "<th>Racha / Winrate</th>"
+                "<th>Desglose Granular (Últimos 5)</th>"
+                "<th>Cuota Justa</th>"
+                "<th>Cuota Mercado</th>"
+                "<th>Diferencial EV%</th>"
+                "</tr></thead>"
+                f"<tbody>{''.join(filas_tr)}</tbody>"
+                "</table></div>"
+            )
+            st.markdown(html_tabla, unsafe_allow_html=True)
+
+        def _renderizar_tabla_barrido_global_radar(lista_items: list[dict]):
+            if not lista_items:
+                st.info("Sin rachas que superen el umbral seleccionado en ningún mercado del catálogo.")
+                return
+            ordenados = sorted(lista_items, key=lambda x: (x["EV_Num"], x["Winrate_Num"]), reverse=True)
+            filas_tr = []
+            for item in ordenados:
+                wr_color = "#00d26a" if item["Winrate_Num"] >= 80.0 else "#38bdf8"
+                filas_tr.append(
+                    "<tr>"
+                    f"<td style='font-weight:700; color:#f8fafc;'>⚽ {_html_rad.escape(item['Equipo'])} "
+                    f"<span style='font-size:0.74rem; color:#64748b; font-weight:500;'>({_html_rad.escape(item['Liga'])})</span></td>"
+                    f"<td style='font-weight:600; color:#cbd5e1;'>{_html_rad.escape(item.get('Mercado_Cat', ''))}</td>"
+                    f"<td style='font-family:monospace; font-weight:700; color:#38bdf8;'>{_html_rad.escape(item.get('Mercado_Linea', ''))}</td>"
+                    f"<td style='font-family:monospace; font-weight:700; color:#f8fafc;'>{item['Aciertos']}</td>"
+                    f"<td style='font-family:monospace; font-weight:700; color:{wr_color};'>{item['Winrate']}</td>"
+                    f"<td>{item['Proximo_HTML']}</td>"
+                    f"<td style='font-family:monospace; font-weight:700; color:#e2e8f0;'>{item['Cuota_Justa']:.2f}</td>"
+                    f"<td style='font-family:monospace; font-weight:700; color:#38bdf8;'>{item['Cuota_Mercado']:.2f}</td>"
+                    f"<td>{item['EV_Badge_HTML']}</td>"
+                    "</tr>"
+                )
+            html_tabla = (
+                "<div class='radar-dark-table-wrap'>"
+                "<table class='radar-dark-table'>"
+                "<thead><tr>"
+                "<th>Equipo / Competición</th>"
+                "<th>Mercado</th>"
+                "<th>Línea</th>"
+                "<th>Racha</th>"
+                "<th>%</th>"
+                "<th>Próximo Rival</th>"
+                "<th>Cuota Justa</th>"
+                "<th>Cuota Mercado</th>"
+                "<th>Diferencial EV%</th>"
+                "</tr></thead>"
+                f"<tbody>{''.join(filas_tr)}</tbody>"
+                "</table></div>"
+            )
+            st.markdown(html_tabla, unsafe_allow_html=True)
+
+        # ── Construcción del Mapa de Próximos Partidos y Escaneo de Equipos ───
+        try:
+            mapa_fixtures, duelos_horizonte = _construir_horizonte_fixtures_y_cuotas(df_rad)
+        except Exception as _exc_call_hz:
+            st.session_state["radar_horizon_warning"] = str(_exc_call_hz)
+            mapa_fixtures, duelos_horizonte = {}, []
+
+        try:
+            equipos_rad = (
+                sorted(
+                    pd.concat([df_rad["HomeTeam"], df_rad["AwayTeam"]])
+                    .dropna()
+                    .astype(str)
+                    .unique()
+                    .tolist()
+                )
+                if (not df_rad.empty and {"HomeTeam", "AwayTeam"}.issubset(df_rad.columns))
+                else []
+            )
+        except Exception:
+            equipos_rad = []
+
+        # Fallback robusto en horizonte de duelos (especialmente para competiciones UEFA)
+        if not duelos_horizonte and equipos_rad:
+            es_comp_uefa = any(
+                u in str(liga_rad_sel).lower()
+                or u in str(st.session_state.get("competicion_activa", "")).lower()
+                for u in ["champions", "europa", "conference", "uefa", "ucl", "uel", "uecl"]
+            )
+            with st.expander(
+                "💡 Modo Duelo Directo UEFA: Selección Manual de Cruce", expanded=es_comp_uefa
+            ):
+                st.info(
+                    "💡 Modo Duelo Directo UEFA: No hay fixtures futuros automáticos en base de datos. Selecciona el cruce de esta jornada:"
+                )
+                c1, c2 = st.columns(2)
+                eq_local = c1.selectbox("Equipo Local:", equipos_rad, key="radar_uefa_local")
+                rivales_uefa = [e for e in equipos_rad if e != eq_local]
+                eq_visit = c2.selectbox(
+                    "Equipo Visitante:",
+                    rivales_uefa if rivales_uefa else equipos_rad,
+                    key="radar_uefa_visit",
+                )
+                if eq_local and eq_visit and eq_local != eq_visit:
+                    duelos_horizonte.append(
+                        {
+                            "local": eq_local,
+                            "visitante": eq_visit,
+                            "fecha": "Hoy",
+                            "div": liga_rad_sel,
+                        }
+                    )
+                    if eq_local not in mapa_fixtures:
+                        mapa_fixtures[eq_local] = {
+                            "rival": eq_visit,
+                            "condicion": "Local",
+                            "etiqueta": f"vs {eq_visit} [Local]",
+                            "fecha": "Hoy",
+                            "cuotas_api": {},
+                        }
+                    if eq_visit not in mapa_fixtures:
+                        mapa_fixtures[eq_visit] = {
+                            "rival": eq_local,
+                            "condicion": "Visitante",
+                            "etiqueta": f"vs {eq_local} [Visitante]",
+                            "fecha": "Hoy",
+                            "cuotas_api": {},
+                        }
+
+        # ── PILAR 2: ESCANEO TRANSVERSAL MULTIMERCADO Y DOBLE CONVERGENCIA ──
+        CATALOGO_MERCADOS_RADAR = []
+        for c_name, l_list in OPCIONES_RADAR.items():
+            for l_name in l_list:
+                k_pair = f"{c_name}||{l_name}"
+                etq_pair = f"{c_name} · {l_name}"
+                CATALOGO_MERCADOS_RADAR.append((k_pair, etq_pair))
+
+        resultados_por_mercado = {k: [] for k, _ in CATALOGO_MERCADOS_RADAR}
+        indice_racha_local = {k: {} for k, _ in CATALOGO_MERCADOS_RADAR}
+        indice_racha_visit = {k: {} for k, _ in CATALOGO_MERCADOS_RADAR}
+
+        for eq in equipos_rad:
+            try:
+                df_eq_all = df_rad[(df_rad["HomeTeam"] == eq) | (df_rad["AwayTeam"] == eq)].sort_values(by="Date_Parsed", ascending=False)
+                df_eq_loc = df_rad[df_rad["HomeTeam"] == eq].sort_values(by="Date_Parsed", ascending=False)
+                df_eq_vis = df_rad[df_rad["AwayTeam"] == eq].sort_values(by="Date_Parsed", ascending=False)
+
+                if "Local" in filtro_condicion:
+                    u5_activo = df_eq_loc.head(5)
+                elif "Visitante" in filtro_condicion:
+                    u5_activo = df_eq_vis.head(5)
+                else:
+                    u5_activo = df_eq_all.head(5)
+
+                div_eq_val = (
+                    str(df_eq_all[col_div_rad].dropna().iloc[0])
+                    if col_div_rad and not df_eq_all.empty and not df_eq_all[col_div_rad].dropna().empty
+                    else "SP1"
+                )
+                liga_eq_nom = MAPA_LIGAS.get(div_eq_val, div_eq_val)
+                info_fix_eq = mapa_fixtures.get(eq)
+
+                for m_key, _ in CATALOGO_MERCADOS_RADAR:
+                    req_sec = any(w in m_key for w in ["Córners", "Tarjetas", "Disciplinaria", "Tiros", "Faltas"])
+
+                    # 1) Evaluación según filtro activo con fallback si es UEFA o faltan secundarias
+                    if req_sec or (es_comp_uefa_activa and len(u5_activo) < 3):
+                        u5_eval, es_fb = _obtener_muestra_multicompetitoria_club(
+                            eq, u5_activo, df_rad_base, cond_campo=filtro_condicion, n_max=5, requiere_secundarias=req_sec
+                        )
+                    else:
+                        u5_eval, es_fb = u5_activo, False
+
+                    ev_act = _evaluar_racha_equipo_mercado(u5_eval, eq, m_key, info_fix_eq, liga_eq_nom, es_fallback=es_fb)
+                    if ev_act and ev_act["Aciertos_Num"] >= umbral_racha:
+                        resultados_por_mercado[m_key].append(ev_act)
+
+                    # 2) Evaluación específica Local / Visitante para el motor de Doble Coincidencia
+                    u5_h_base = df_eq_loc.head(5) if len(df_eq_loc) >= 3 else df_eq_all.head(5)
+                    u5_a_base = df_eq_vis.head(5) if len(df_eq_vis) >= 3 else df_eq_all.head(5)
+
+                    if req_sec or (es_comp_uefa_activa and len(u5_h_base) < 3):
+                        u5_h_eval, fb_h = _obtener_muestra_multicompetitoria_club(
+                            eq, u5_h_base, df_rad_base, cond_campo="Local", n_max=5, requiere_secundarias=req_sec
+                        )
+                    else:
+                        u5_h_eval, fb_h = u5_h_base, False
+
+                    if req_sec or (es_comp_uefa_activa and len(u5_a_base) < 3):
+                        u5_a_eval, fb_a = _obtener_muestra_multicompetitoria_club(
+                            eq, u5_a_base, df_rad_base, cond_campo="Visitante", n_max=5, requiere_secundarias=req_sec
+                        )
+                    else:
+                        u5_a_eval, fb_a = u5_a_base, False
+
+                    ev_h = _evaluar_racha_equipo_mercado(u5_h_eval, eq, m_key, info_fix_eq, liga_eq_nom, es_fallback=fb_h)
+                    ev_a = _evaluar_racha_equipo_mercado(u5_a_eval, eq, m_key, info_fix_eq, liga_eq_nom, es_fallback=fb_a)
+
+                    if ev_h and ev_h["Aciertos_Num"] >= umbral_racha:
+                        indice_racha_local[m_key][eq] = ev_h
+                    if ev_a and ev_a["Aciertos_Num"] >= umbral_racha:
+                        indice_racha_visit[m_key][eq] = ev_a
+            except Exception as _exc_eq_scan:
+                st.session_state["radar_scan_warning"] = str(_exc_eq_scan)
+                continue
+
+        # ── PILAR 3: DOUBLE-CONVERGENCE RADAR ("CHOQUE DE RACHAS" ENGINE) ─────
+        choques_detectados = []
+        for duelo in duelos_horizonte:
+            try:
+                eq_h = duelo["local"]
+                eq_a = duelo["visitante"]
+                fecha_d = duelo["fecha"]
+                for m_key, m_label in CATALOGO_MERCADOS_RADAR:
+                    r_h = indice_racha_local[m_key].get(eq_h)
+                    r_a = indice_racha_visit[m_key].get(eq_a)
+                    if r_h and r_a:
+                        wr_comb = round((r_h["Winrate_Num"] + r_a["Winrate_Num"]) / 2.0, 1)
+                        p_comb_cal = float(np.clip(
+                            (float(r_h.get("Prob_Calibrada", 0.5)) + float(r_a.get("Prob_Calibrada", 0.5))) / 2.0,
+                            0.05,
+                            0.88,
+                        ))
+                        cj_comb = max(1.14, round(1.0 / p_comb_cal, 2))
+                        cm_comb = round((r_h["Cuota_Mercado"] + r_a["Cuota_Mercado"]) / 2.0, 2)
+                        ev_comb = round(((p_comb_cal * cm_comb) - 1.0) * 100.0, 1)
+                        choques_detectados.append({
+                            "partido": f"{eq_h} vs {eq_a}",
+                            "liga": r_h["Liga"],
+                            "fecha": fecha_d,
+                            "mercado": m_label,
+                            "racha_local": r_h,
+                            "racha_visit": r_a,
+                            "wr_comb": wr_comb,
+                            "cuota_justa": cj_comb,
+                            "cuota_mercado": cm_comb,
+                            "ev_comb": ev_comb,
+                        })
+            except Exception:
+                continue
+
+        choques_detectados.sort(key=lambda x: (x["wr_comb"], x["ev_comb"]), reverse=True)
+
+        todas_rachas_activas = []
+        for m_key, m_label in CATALOGO_MERCADOS_RADAR:
+            c_nom, l_nom = _resolver_par_mercado_radar(m_key)
+            for r_item in resultados_por_mercado.get(m_key, []):
+                copia_r = dict(r_item)
+                copia_r["Mercado_Nombre"] = m_label
+                copia_r["Mercado_Cat"] = c_nom
+                copia_r["Mercado_Linea"] = l_nom
+                copia_r["Tipo"] = "⚔️ Partido"
+                todas_rachas_activas.append(copia_r)
+
+        # ── SECCIÓN 3: ESTRUCTURA EN 2 PESTAÑAS PRINCIPALES (TABS) ───────────
+        tab_feed, tab_choque = st.tabs([
+            "🌟 Feed Rápido (Partidos)",
+            "⚔️ Choque de Tendencias (Partidos)",
+        ])
+
+        # ── PESTAÑA 1: FEED RÁPIDO (PARTIDOS) ────────────────────────────────
+        with tab_feed:
+            st.caption(
+                "Barrido algorítmico transversal sobre todos los mercados: Filtrado automático "
+                "de oportunidades con **Winrate ≥ 75% o EV% ≥ 15%** que cumplen el umbral de racha activo."
+            )
+
+            feed_items = []
+            for r in todas_rachas_activas:
+                if r["Winrate_Num"] >= 75.0 or r["EV_Num"] >= 15.0:
+                    feed_items.append({
+                        "tipo": "⚔️ Partido",
+                        "tipo_html": "<span class='pill-ev-cyan' style='font-size:0.72rem; font-weight:700;'>⚔️ Partido</span>",
+                        "equipo": r["Equipo"],
+                        "liga": r["Liga"],
+                        "partido_str": f"{r['Equipo']} ({r['Liga']})",
+                        "proximo_html": r["Proximo_HTML"],
+                        "proximo_txt": r["Proximo_Plano"],
+                        "mercado_linea": r["Mercado_Nombre"],
+                        "aciertos": r["Aciertos"],
+                        "winrate_num": r["Winrate_Num"],
+                        "winrate_str": r["Winrate"],
+                        "chips_html": r["Forma_HTML"],
+                        "chips_txt": r["Forma_Texto"],
+                        "cuota_justa": r["Cuota_Justa"],
+                        "cuota_mercado": r["Cuota_Mercado"],
+                        "ev_num": r["EV_Num"],
+                        "ev_badge_html": r["EV_Badge_HTML"],
+                    })
+
+            feed_items.sort(key=lambda x: (x["ev_num"], x["winrate_num"]), reverse=True)
+
+            if feed_items:
+                tarjetas_feed_html = []
+                for it in feed_items[:4]:
+                    ev_val = it["ev_num"]
+                    ev_cls = "pill-ev-high" if ev_val > 5.0 else ("pill-ev-cyan" if ev_val >= -5.0 else "pill-ev-neg")
+                    tarjetas_feed_html.append(
+                        "<div class='radar-choque-card'>"
+                        "<div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;'>"
+                        f"{it['tipo_html']}"
+                        f"<span class='{ev_cls}'>EV {ev_val:+.1f}%</span>"
+                        "</div>"
+                        f"<div style='font-size:1.0rem; font-weight:800; color:#f8fafc; margin-bottom:4px;'>"
+                        f"⚽ {_html_rad.escape(it['equipo'])} "
+                        f"<span style='font-size:0.76rem; color:#94a3b8; font-weight:500;'>({_html_rad.escape(it['liga'])})</span></div>"
+                        f"<div style='font-size:0.80rem; color:#cbd5e1; margin-bottom:6px;'>"
+                        f"{it['proximo_html']}"
+                        "</div>"
+                        f"<div style='color:#38bdf8; font-weight:700; font-size:0.84rem; margin-bottom:4px;'>"
+                        f"{_html_rad.escape(it['mercado_linea'])}</div>"
+                        f"<div style='font-size:0.78rem; color:#94a3b8; font-family:monospace; margin-bottom:6px;'>"
+                        f"Racha: <b style='color:#00d26a;'>{it['aciertos']} ({it['winrate_str']})</b> | "
+                        f"Justa: <b style='color:#f8fafc;'>{it['cuota_justa']:.2f}</b> vs "
+                        f"Base: <b style='color:#38bdf8;'>{it['cuota_mercado']:.2f}</b>"
+                        "</div>"
+                        f"<div style='margin-top:4px;'>{it['chips_html']}</div>"
+                        "</div>"
+                    )
+
+                st.markdown(
+                    "<div class='radar-choque-wrapper'>"
+                    "<div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; margin-bottom:8px;'>"
+                    "<span style='font-size:1.05rem; font-weight:800; color:#f8fafc;'>"
+                    "💎 Top 4 Oportunidades Globales de Mayor Valor Esperado (EV+)</span>"
+                    f"<span class='pill-ev-high'>{len(feed_items)} Oportunidades Detectadas</span>"
+                    "</div>"
+                    f"<div class='radar-choque-grid'>{''.join(tarjetas_feed_html)}</div>"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+
+                st.markdown("##### 📋 Top 15 Oportunidades Transversales (Winrate ≥ 75% o EV% ≥ 15%)")
+                filas_top15 = []
+                for it in feed_items[:15]:
+                    wr_color = "#00d26a" if it["winrate_num"] >= 80.0 else "#38bdf8"
+                    filas_top15.append(
+                        "<tr>"
+                        f"<td>{it['tipo_html']}</td>"
+                        f"<td style='font-weight:700; color:#f8fafc;'>⚽ {_html_rad.escape(it['equipo'])} "
+                        f"<span style='font-size:0.74rem; color:#64748b; font-weight:500;'>({_html_rad.escape(it['liga'])})</span></td>"
+                        f"<td>{it['proximo_html']}</td>"
+                        f"<td style='font-weight:600; color:#cbd5e1;'>{_html_rad.escape(it['mercado_linea'])}</td>"
+                        f"<td style='font-family:monospace; font-weight:700; color:{wr_color};'>{it['aciertos']} ({it['winrate_str']})</td>"
+                        f"<td>{it['chips_html']}</td>"
+                        f"<td style='font-family:monospace; font-weight:700; color:#e2e8f0;'>{it['cuota_justa']:.2f}</td>"
+                        f"<td style='font-family:monospace; font-weight:700; color:#38bdf8;'>{it['cuota_mercado']:.2f}</td>"
+                        f"<td>{it['ev_badge_html']}</td>"
+                        "</tr>"
+                    )
+
+                html_top15 = (
+                    "<div class='radar-dark-table-wrap'>"
+                    "<table class='radar-dark-table'>"
+                    "<thead><tr>"
+                    "<th>Tipo</th>"
+                    "<th>Equipo / Partido</th>"
+                    "<th>Próximo Cruce</th>"
+                    "<th>Mercado / Línea</th>"
+                    "<th>Racha / %</th>"
+                    "<th>Desglose (Chips)</th>"
+                    "<th>Cuota Justa</th>"
+                    "<th>Cuota Mercado</th>"
+                    "<th>Diferencial EV%</th>"
+                    "</tr></thead>"
+                    f"<tbody>{''.join(filas_top15)}</tbody>"
+                    "</table></div>"
+                )
+                st.markdown(html_top15, unsafe_allow_html=True)
+
+                # ── Veredicto Táctico AI Studio para Tab Feed ──
+                st.markdown("---")
+                col_ai_btn, col_ai_info = st.columns([1.6, 2.4])
+                with col_ai_btn:
+                    ejecutar_veredicto_radar = st.button(
+                        "⚡ Generar Veredicto Táctico del Radar (AI Studio)",
+                        width="stretch",
+                        type="primary",
+                        key="btn_radar_ai_digest_feed",
+                    )
+                with col_ai_info:
+                    st.caption(
+                        f"📊 **{len(feed_items)} oportunidades en feed** · "
+                        f"Síntesis automática de las **Top 3 oportunidades con mayor EV%** vía `gemini-3.8-flash`."
+                    )
+
+                if ejecutar_veredicto_radar:
+                    clave_radar_ia = ""
+                    try:
+                        clave_radar_ia = st.secrets.get("GEMINI_API_KEY", "") or ""
+                    except Exception:
+                        clave_radar_ia = ""
+                    if not clave_radar_ia:
+                        clave_radar_ia = (
+                            _os_rad.getenv("GEMINI_API_KEY", "")
+                            or st.session_state.get("input_gemini_api_key_asistente", "")
+                            or ""
+                        ).strip()
+
+                    if not _RADAR_GENAI_OK or _genai_rad is None:
+                        st.error("⚠️ El SDK `google-genai` no está disponible en este entorno.")
+                    elif not clave_radar_ia:
+                        st.warning(
+                            "🔑 Configura `GEMINI_API_KEY` en `st.secrets` / entorno o introdúcela en el módulo **🤖 Asistente IA Local** para activar el Veredicto en vivo."
+                        )
+                    else:
+                        top3_feed = feed_items[:3]
+                        resumen_top3_txt = "\n".join(
+                            f"- {idx + 1}. [{it['tipo']}] {it['equipo']} ({it['liga']}) | Mercado: {it['mercado_linea']} | "
+                            f"Racha: {it['aciertos']} ({it['winrate_str']}) | Próximo: {it['proximo_txt']} | "
+                            f"Cuota Justa: {it['cuota_justa']:.2f} vs Mercado: {it['cuota_mercado']:.2f} (EV: {it['ev_num']:+.1f}%) | "
+                            f"Forma: {it['chips_txt']}"
+                            for idx, it in enumerate(top3_feed)
+                        )
+                        prompt_radar_digest = (
+                            "Eres el Director Cuantitativo de BigData Football.\n"
+                            "Sintetiza exclusivamente las siguientes Top 3 rachas con mayor Valor Esperado (EV+) "
+                            "detectadas en el Radar de Tendencias en un informe ejecutivo ultra-directo de exactamente 3 viñetas "
+                            "(una por selección, indicando equipo, mercado, próximo rival, diferencial entre Cuota Justa y Cuota Mercado, y dictamen operativo).\n"
+                            "Prohibido usar lambda 'λ' o '@' antes de las cuotas.\n\n"
+                            f"TOP_3_OPORTUNIDADES_RADAR:\n{resumen_top3_txt}"
+                        )
+
+                        def _stream_veredicto_radar(prompt_txt):
+                            client_r = _genai_rad.Client(api_key=clave_radar_ia)
+                            try:
+                                stream_r = client_r.models.generate_content_stream(
+                                    model="gemini-3.8-flash",
+                                    contents=prompt_txt,
+                                )
+                                for ch_r in stream_r:
+                                    if ch_r.text:
+                                        yield ch_r.text
+                            except Exception:
+                                stream_r = client_r.models.generate_content_stream(
+                                    model="gemini-2.0-flash",
+                                    contents=prompt_txt,
+                                )
+                                for ch_r in stream_r:
+                                    if ch_r.text:
+                                        yield ch_r.text
+
+                        with st.container():
+                            st.markdown("##### 🧠 Veredicto Táctico Ejecutivo (Google AI Studio · Top 3 EV+)")
+                            try:
+                                st.write_stream(_stream_veredicto_radar(prompt_radar_digest))
+                            except Exception as err_rad_ia:
+                                st.error(f"Error al generar el veredicto con Google AI Studio: {err_rad_ia}")
+            else:
+                st.info("ℹ️ No hay oportunidades que superen el umbral de Winrate ≥ 75% o EV% ≥ 15% en el filtro actual.")
+
+        # ── PESTAÑA 2: CHOQUE DE TENDENCIAS (PARTIDOS) ───────────────────────
+        with tab_choque:
+            st.caption("Detección de patrones y convergencias en partidos colectivos (convergencia simultánea local + visitante y desglose por mercado).")
+
+            cats_partido = [
+                "🌐 Todos los Mercados",
+                "⚽ Goles Totales",
+                "🎯 Ambos Marcan (BTTS)",
+                "🚩 Córners Totales",
+                "🟨 Tarjetas Totales",
+                "⚡ Faltas Totales",
+                "🔥 Doble Oportunidad + Goles",
+            ]
+
+            try:
+                cat_sel_tab2 = st.pills("Categoría de Mercado:", cats_partido, default="🌐 Todos los Mercados", key="radar_pills_tab2")
+                if not cat_sel_tab2:
+                    cat_sel_tab2 = "🌐 Todos los Mercados"
+            except Exception:
+                cat_sel_tab2 = st.radio("Categoría de Mercado:", cats_partido, horizontal=True, key="radar_radio_tab2")
+
+            mapa_cats_partido = {
+                "⚽ Goles Totales": "⚽ Goles Totales",
+                "🎯 Ambos Marcan (BTTS)": "🎯 Ambos Marcan (BTTS)",
+                "🚩 Córners Totales": "🚩 Córners Totales",
+                "🟨 Tarjetas Totales": "🟨 Fricción Disciplinaria (Tarjetas)",
+                "⚡ Faltas Totales": "⚡ Fricción de Faltas Cometidas",
+                "🔥 Doble Oportunidad + Goles": "🔥 Doble Oportunidad + Goles",
+            }
+
+            linea_elegida_tab2 = "TODAS"
+            cat_target = mapa_cats_partido.get(cat_sel_tab2)
+
+            if cat_sel_tab2 != "🌐 Todos los Mercados" and cat_target:
+                lineas_disponibles = OPCIONES_RADAR.get(cat_target, [])
+                opciones_lineas_tab2 = []
+                conteo_por_linea = {}
+                total_cat = 0
+                for lin in lineas_disponibles:
+                    k_par = f"{cat_target}||{lin}"
+                    cnt = len(resultados_por_mercado.get(k_par, []))
+                    conteo_por_linea[lin] = cnt
+                    total_cat += cnt
+
+                opciones_lineas_tab2.append(f"Todas las Líneas ({total_cat})")
+                for lin in lineas_disponibles:
+                    opciones_lineas_tab2.append(f"{lin} ({conteo_por_linea[lin]})")
+
+                sel_lin_str = st.selectbox("Línea Objetivo:", opciones_lineas_tab2, key="radar_linea_tab2")
+                if not sel_lin_str.startswith("Todas las Líneas"):
+                    linea_elegida_tab2 = sel_lin_str.split(" (")[0].strip()
+
+            if cat_sel_tab2 == "🌐 Todos los Mercados":
+                choques_filtrados = choques_detectados
+                rachas_filtradas = todas_rachas_activas
+            else:
+                choques_filtrados = [
+                    ch for ch in choques_detectados
+                    if cat_target in ch["mercado"] and (linea_elegida_tab2 == "TODAS" or linea_elegida_tab2 in ch["mercado"])
+                ]
+                rachas_filtradas = [
+                    r for r in todas_rachas_activas
+                    if r["Mercado_Cat"] == cat_target and (linea_elegida_tab2 == "TODAS" or r["Mercado_Linea"] == linea_elegida_tab2)
+                ]
+
+            if choques_filtrados:
+                tarjetas_choque_html = []
+                for ch in choques_filtrados[:6]:
+                    rl = ch["racha_local"]
+                    rv = ch["racha_visit"]
+                    ev_cls = "pill-ev-high" if ch["ev_comb"] > 5.0 else ("pill-ev-cyan" if ch["ev_comb"] >= -5.0 else "pill-ev-neg")
+                    tarjetas_choque_html.append(
+                        "<div class='radar-choque-card'>"
+                        f"<div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;'>"
+                        f"<span style='color:#38bdf8; font-weight:700; font-size:0.82rem;'>{_html_rad.escape(ch['mercado'])}</span>"
+                        f"<span class='{ev_cls}'>EV {ch['ev_comb']:+.1f}%</span>"
+                        "</div>"
+                        f"<div style='font-size:1.0rem; font-weight:800; color:#f8fafc; margin-bottom:4px;'>"
+                        f"⚔️ {_html_rad.escape(ch['partido'])} "
+                        f"<span style='font-size:0.76rem; color:#94a3b8; font-weight:500;'>({_html_rad.escape(ch['fecha'])})</span></div>"
+                        f"<div style='font-size:0.80rem; color:#cbd5e1; margin-bottom:6px;'>"
+                        f"🏠 <b>{_html_rad.escape(rl['Equipo'])}:</b> <span style='color:#00d26a; font-family:monospace;'>{rl['Aciertos']} ({rl['Winrate']})</span> · "
+                        f"✈️ <b>{_html_rad.escape(rv['Equipo'])}:</b> <span style='color:#00d26a; font-family:monospace;'>{rv['Aciertos']} ({rv['Winrate']})</span>"
+                        "</div>"
+                        f"<div style='font-size:0.78rem; color:#94a3b8; font-family:monospace;'>"
+                        f"Convergencia: <b style='color:#00d26a;'>{ch['wr_comb']:.0f}%</b> | "
+                        f"Cuota Justa: <b style='color:#f8fafc;'>{ch['cuota_justa']:.2f}</b> vs "
+                        f"Mercado: <b style='color:#38bdf8;'>{ch['cuota_mercado']:.2f}</b>"
+                        "</div>"
+                        "</div>"
+                    )
+                st.markdown(
+                    "<div class='radar-choque-wrapper'>"
+                    "<div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;'>"
+                    "<span style='font-size:1.05rem; font-weight:800; color:#f8fafc;'>"
+                    "💥 Oportunidad de Alta Fricción: Choque de Tendencias (Doble Coincidencia Local + Visitante)</span>"
+                    f"<span class='pill-ev-cyan'>{len(choques_filtrados)} Convergencias Activas</span>"
+                    "</div>"
+                    f"<div class='radar-choque-grid'>{''.join(tarjetas_choque_html)}</div>"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.info("ℹ️ No hay partidos que alcancen este umbral. Prueba reduciendo el umbral de racha.")
+
+            if not rachas_filtradas:
+                st.info("Sin rachas de partido que superen el umbral seleccionado bajo este filtro.")
+            else:
+                st.markdown(f"#### 🎯 Desglose de Rachas Activas ({len(rachas_filtradas)})")
+                _renderizar_tabla_barrido_global_radar(rachas_filtradas)
 
 elif menu_seleccionado == "📈 Tendencias Individuales":
     render_radar_tendencias_individuales()
@@ -9454,116 +10760,8 @@ elif menu_seleccionado == "📋 Scouting de Jugadores":
                 },
             )
 
-elif menu_seleccionado == "🤖 Motor de Apuestas (EV+)":
-    st.title("🤖 Motor de Probabilidades: Modelo Poisson Expandido")
-    if not df_partidos.empty and 'HomeTeam' in df_partidos.columns:
-        equipos_poisson = sorted(pd.concat([df_partidos['HomeTeam'], df_partidos['AwayTeam']]).dropna().unique())
-        col_p1, col_p2 = st.columns(2)
-        with col_p1: eq_local = st.selectbox("Selecciona Equipo Local:", equipos_poisson, index=0)
-        with col_p2: eq_visitante = st.selectbox("Selecciona Equipo Visitante:", equipos_poisson, index=1 if len(equipos_poisson)>1 else 0)
-
-        # Controles de Decaimiento Temporal (Time-Decay Poisson)
-        col_td1, col_td2 = st.columns([2, 2])
-        with col_td1:
-            modo_ponderacion = st.radio(
-                "⏳ Modo de Ponderación Temporal:",
-                ["🔥 Forma Reciente (Time-Decay Poisson)", "📚 Histórico Completo (Media Clásica)"],
-                horizontal=True,
-                key="modo_td_motor",
-            )
-            usar_time_decay = "Time-Decay" in modo_ponderacion
-        with col_td2:
-            xi_decay = st.slider(
-                "📉 Nivel de Ponderación ξ (w = exp(-ξ · Δdías) | 0.010 ≈ últ. 6-8 partidos):",
-                min_value=0.001,
-                max_value=0.025,
-                value=0.010,
-                step=0.001,
-                format="%.3f",
-                disabled=not usar_time_decay,
-                key="xi_td_motor",
-            )
-        
-        if eq_local != eq_visitante:
-            p_local = df_partidos[df_partidos['HomeTeam'] == eq_local]
-            p_vis = df_partidos[df_partidos['AwayTeam'] == eq_visitante]
-
-            # 1) Cálculo original de medias brutas (Histórico Completo)
-            xg_l_raw = ((p_local['FTHG'].mean() if not p_local.empty else 1.5) + (p_vis['FTHG'].mean() if not p_vis.empty else 1.5)) / 2
-            xg_v_raw = ((p_vis['FTAG'].mean() if not p_vis.empty else 1.0) + (p_local['FTAG'].mean() if not p_local.empty else 1.0)) / 2
-
-            # 2) Cálculo con Decaimiento Temporal (Time-Decay Poisson: w = exp(-xi * delta_dias))
-            fecha_ref_global = None
-            if "Date" in df_partidos.columns:
-                fechas_todas = pd.to_datetime(df_partidos["Date"], errors="coerce", dayfirst=True)
-                if not fechas_todas.isna().all():
-                    fecha_ref_global = fechas_todas.max()
-
-            if usar_time_decay:
-                gf_l_td = calcular_media_ponderada_poisson(p_local, 'FTHG', xi=xi_decay, default=1.5, fecha_ref=fecha_ref_global)
-                gc_l_td = calcular_media_ponderada_poisson(p_local, 'FTAG', xi=xi_decay, default=1.0, fecha_ref=fecha_ref_global)
-                gf_v_td = calcular_media_ponderada_poisson(p_vis, 'FTAG', xi=xi_decay, default=1.0, fecha_ref=fecha_ref_global)
-                gc_v_td = calcular_media_ponderada_poisson(p_vis, 'FTHG', xi=xi_decay, default=1.5, fecha_ref=fecha_ref_global)
-                xg_l = (gf_l_td + gc_v_td) / 2
-                xg_v = (gf_v_td + gc_l_td) / 2
-            else:
-                xg_l = xg_l_raw
-                xg_v = xg_v_raw
-            
-            prob_h = prob_d = prob_a = prob_over_15 = prob_over_25 = prob_over_35 = prob_btts_si = tot_prob = 0
-            matriz = []
-            
-            for i in range(7):
-                for j in range(7):
-                    pr = calcular_probabilidad_poisson(xg_l, i) * calcular_probabilidad_poisson(xg_v, j)
-                    tot_prob += pr
-                    if i > j: prob_h += pr
-                    elif i == j: prob_d += pr
-                    else: prob_a += pr
-                    
-                    if (i + j) > 1.5: prob_over_15 += pr
-                    if (i + j) > 2.5: prob_over_25 += pr
-                    if (i + j) > 3.5: prob_over_35 += pr
-                    if i > 0 and j > 0: prob_btts_si += pr
-                    matriz.append({"Marcador": f"{i} - {j}", "Probabilidad": pr})
-            
-            norm = tot_prob if tot_prob > 0 else 1.0
-            
-            st.markdown("---")
-            st.markdown(f"### ⚽ xG: **{eq_local} ({xg_l:.2f})** vs **{eq_visitante} ({xg_v:.2f})**")
-            if usar_time_decay:
-                st.caption(
-                    f"⏳ **Time-Decay activo (ξ = {xi_decay:.3f}):** "
-                    f"xG Forma Reciente `{xg_l:.2f} - {xg_v:.2f}`  |  "
-                    f"xG Histórico Completo sin ponderar: `{xg_l_raw:.2f} - {xg_v_raw:.2f}`"
-                )
-            st.subheader("1️⃣ Mercado Principal (1X2)")
-            c_res1, c_res2, c_res3 = st.columns(3)
-            c_res1.metric(f"Local", f"Cuota {1/(prob_h/norm):.2f}", f"{(prob_h/norm*100):.1f}%")
-            c_res2.metric("Empate", f"Cuota {1/(prob_d/norm):.2f}", f"{(prob_d/norm*100):.1f}%")
-            c_res3.metric(f"Visitante", f"Cuota {1/(prob_a/norm):.2f}", f"{(prob_a/norm*100):.1f}%")
-            
-            p_tab1, p_tab2, p_tab3 = st.tabs(["⚽ Goles (Over/Under)", "🎯 BTTS", "🏆 Marcadores"])
-            with p_tab1:
-                col_g1, col_g2, col_g3 = st.columns(3)
-                col_g1.metric("+1.5 Goles", f"Cuota {1/(prob_over_15/norm):.2f}", f"{(prob_over_15/norm*100):.1f}%")
-                col_g2.metric("+2.5 Goles", f"Cuota {1/(prob_over_25/norm):.2f}", f"{(prob_over_25/norm*100):.1f}%")
-                col_g3.metric("+3.5 Goles", f"Cuota {1/(prob_over_35/norm):.2f}", f"{(prob_over_35/norm*100):.1f}%")
-            with p_tab2:
-                col_b1, col_b2 = st.columns(2)
-                col_b1.metric("SÍ", f"Cuota {1/(prob_btts_si/norm):.2f}", f"{(prob_btts_si/norm*100):.1f}%")
-                col_b2.metric("NO", f"Cuota {1/(1-(prob_btts_si/norm)):.2f}", f"{((1-(prob_btts_si/norm))*100):.1f}%")
-            with p_tab3:
-                df_m = pd.DataFrame(matriz)
-                df_m['Probabilidad'] = df_m['Probabilidad'] / norm
-                df_m = df_m.sort_values(by="Probabilidad", ascending=False).head(5)
-                df_m['Prob_Pct'] = df_m['Probabilidad'].apply(lambda x: f"{x*100:.1f}%")
-                df_m['Cuota_Justa'] = df_m['Probabilidad'].apply(lambda x: round(1/x, 2) if x>0 else 0)
-                st.dataframe(df_m[['Marcador', 'Prob_Pct', 'Cuota_Justa']], width="stretch", hide_index=True)
-
 elif menu_seleccionado == "⚖️ Directorio y Matchup Árbitros":
     st.title("⚖️ Directorio Profesional y Matchup de Árbitros")
-    
     dict_arbitros = {
         "LaLiga (España)": [
             {"Árbitro": "Jesús Gil Manzano", "Comité": "Extremeño", "Perfil Disciplinario": "Alto (Mano dura / Tarjetero)", "Media Amarillas Est.": 5.40, "Media Rojas": 0.35},
@@ -9701,165 +10899,6 @@ elif menu_seleccionado == "⚖️ Directorio y Matchup Árbitros":
             st.caption(f"📋 Mostrando **{len(df_arbitros_view)} colegiados** indexados (mínimo {min_partidos_ref} partidos pitados).")
             st.dataframe(df_arbitros_view, width="stretch", hide_index=True)
         
-    with tab_ref2:
-        st.markdown("Calcula la línea esperada de tarjetas combinando los promedios del colegiado con la tendencia tarjetera de ambos equipos.")
-        if not (err_partidos or df_partidos_global.empty):
-            render_matchup_disciplinario(df_partidos_global)
-            st.markdown("---")
-            st.caption("📎 Estimador rápido de línea tarjetera:")
-            censo_matchup = _obtener_censo_global_arbitros(df_partidos_global)
-            opciones_matchup = [
-                item["etiqueta_selector"] for item in sorted(censo_matchup.values(), key=lambda x: x["nombre"])
-            ]
-            eqs_tarj = sorted(pd.concat([df_partidos_global['HomeTeam'], df_partidos_global['AwayTeam']]).dropna().unique())
-            
-            c_m1, c_m2, c_m3 = st.columns(3)
-            with c_m1:
-                arb_sel = st.selectbox("⚖️ Selecciona Árbitro:", opciones_matchup, key="matchup_ref_quick")
-            with c_m2:
-                eq_t1 = st.selectbox("🏠 Equipo Local:", eqs_tarj, index=0, key="matchup_eq_loc_quick")
-            with c_m3:
-                eq_t2 = st.selectbox("✈️ Equipo Visitante:", eqs_tarj, index=1 if len(eqs_tarj)>1 else 0, key="matchup_eq_vis_quick")
-            
-            perfil_sel_rapido = _calcular_perfil_disciplinario_arbitro(arb_sel, censo_matchup, df_partidos_global)
-            _renderizar_tarjeta_perfil_arbitro(perfil_sel_rapido)
-
-            def stats_tarjetas(eq):
-                df_h = df_partidos_global[df_partidos_global['HomeTeam'] == eq]
-                df_a = df_partidos_global[df_partidos_global['AwayTeam'] == eq]
-                if 'HY' in df_partidos_global.columns and 'AY' in df_partidos_global.columns:
-                    t = pd.to_numeric(df_h['HY'], errors='coerce').fillna(0).sum() + pd.to_numeric(df_a['AY'], errors='coerce').fillna(0).sum()
-                    partidos = len(df_h) + len(df_a)
-                    return float(t / partidos) if partidos > 0 else 2.10
-                return 2.10
-                
-            t1_avg = stats_tarjetas(eq_t1)
-            t2_avg = stats_tarjetas(eq_t2)
-            media_ref = float(perfil_sel_rapido["media_amarillas"])
-            total_esperado = (t1_avg + t2_avg + media_ref) / 2.0
-            
-            st.markdown("---")
-            c_r1, c_r2, c_r3 = st.columns(3)
-            c_r1.metric(f"Media Árbitro ({perfil_sel_rapido['nombre']})", f"{media_ref:.2f}", "Amarillas/Partido")
-            c_r2.metric(f"Provocadas {eq_t1}", f"{t1_avg:.2f}", "Amarillas/Partido", delta_color="off")
-            c_r3.metric(f"Provocadas {eq_t2}", f"{t2_avg:.2f}", "Amarillas/Partido", delta_color="off")
-            
-            st.success(f"🔥 Línea de Tarjetas Amarillas Proyectada: **{total_esperado:.1f}**")
-        else:
-            st.warning("Datos de partidos no disponibles para calcular tendencias de equipos.")
-
-elif menu_seleccionado == "🧮 Hándicap Asiático Avanzado":
-    st.title("🧮 Motor Cuantitativo: Hándicap Asiático & Líneas de Goles")
-    st.markdown(
-        "Modelado predictivo **Bivariante de Poisson con ajuste de Dixon-Coles (ρ = -0.11)**, "
-        "proyección de **Fair Spread**, cobertura histórica **ATS** y valoración **+EV / 1/4 Kelly**."
-    )
-    
-    LINEAS_AH_EQUIPOS = [
-        -1.50, -1.25, -1.00, -0.75, -0.50, -0.25,
-        0.00,
-        0.25, 0.50, 0.75, 1.00, 1.25, 1.50,
-    ]
-    LINEAS_AH_GOLES = [2.00, 2.25, 2.50, 2.75, 3.00]
-    RHO_DIXON_COLES = -0.11
-    VENTANA_HISTORICA_AH = 15
-
-    def _calcular_matriz_dixon_coles(lam_h, lam_a, rho=RHO_DIXON_COLES, max_goles=7):
-        n = max_goles + 1
-        matriz = np.zeros((n, n), dtype=float)
-        lam_h_safe = max(0.05, float(lam_h))
-        lam_a_safe = max(0.05, float(lam_a))
-
-        for i in range(n):
-            p_i = calcular_probabilidad_poisson(lam_h_safe, i)
-            for j in range(n):
-                p_j = calcular_probabilidad_poisson(lam_a_safe, j)
-                matriz[i, j] = p_i * p_j
-
-        matriz[0, 0] *= max(0.0, 1.0 - (lam_h_safe * lam_a_safe * rho))
-        matriz[1, 0] *= max(0.0, 1.0 + (lam_a_safe * rho))
-        matriz[0, 1] *= max(0.0, 1.0 + (lam_h_safe * rho))
-        matriz[1, 1] *= max(0.0, 1.0 - rho)
-
-        total = float(np.sum(matriz))
-        if total > 0.0:
-            matriz /= total
-        else:
-            matriz[0, 0] = 1.0
-        return matriz
-
-    def _liquidar_estado_unidad(diff):
-        if abs(diff) < 1e-9:
-            return "PUSH"
-        return "WIN" if diff > 0.0 else "LOSS"
-
-    def _resolver_cuota_asiatica(p_full_win, p_half_win, p_push, p_half_loss, p_full_loss):
-        denominador = float(p_full_win) + 0.5 * float(p_half_win)
-        numerador = 1.0 - float(p_push) - 0.5 * float(p_half_win) - 0.5 * float(p_half_loss)
-        if denominador <= 1e-9 or numerador <= 1e-9:
-            return float("inf"), 0.0
-        cuota_justa = numerador / denominador
-        if cuota_justa <= 1.0:
-            return 1.0, 1.0
-        prob_equivalente = min(1.0, max(0.0, 1.0 / cuota_justa))
-        return cuota_justa, prob_equivalente
-
-    def _evaluar_linea_handicap(matriz, linea, perspectiva="local"):
-        es_cuarto = abs((abs(linea) * 4.0) % 2.0 - 1.0) < 1e-6
-        if es_cuarto:
-            l1, l2 = linea - 0.25, linea + 0.25
-        else:
-            l1, l2 = linea, linea
-
-        p_fw = p_hw = p_push = p_hl = p_fl = 0.0
-        n = matriz.shape[0]
-        for i in range(n):
-            for j in range(n):
-                prob_ij = float(matriz[i, j])
-                margen = (i - j) if perspectiva == "local" else (j - i)
-                s1 = _liquidar_estado_unidad(margen + l1)
-                s2 = _liquidar_estado_unidad(margen + l2)
-
-                if s1 == "WIN" and s2 == "WIN":
-                    p_fw += prob_ij
-                elif (s1 == "WIN" and s2 == "PUSH") or (s1 == "PUSH" and s2 == "WIN"):
-                    p_hw += prob_ij
-                elif s1 == "PUSH" and s2 == "PUSH":
-                    p_push += prob_ij
-                elif (s1 == "LOSS" and s2 == "PUSH") or (s1 == "PUSH" and s2 == "LOSS"):
-                    p_hl += prob_ij
-                else:
-                    p_fl += prob_ij
-
-        cuota_justa, prob_equiv = _resolver_cuota_asiatica(p_fw, p_hw, p_push, p_hl, p_fl)
-        return {
-            "linea": linea,
-            "p_full_win": p_fw,
-            "p_half_win": p_hw,
-            "p_push": p_push,
-            "p_half_loss": p_hl,
-            "p_full_loss": p_fl,
-            "p_acierto": p_fw + 0.5 * p_hw,
-            "p_reembolso_medio": p_hw + p_push + p_hl,
-            "cuota_justa": cuota_justa,
-            "prob_equiv": prob_equiv,
-        }
-
-    def _evaluar_linea_totales_asiaticos(matriz, linea_t):
-        es_cuarto = abs((abs(linea_t) * 4.0) % 2.0 - 1.0) < 1e-6
-        t1, t2 = (linea_t - 0.25, linea_t + 0.25) if es_cuarto else (linea_t, linea_t)
-
-        o_fw = o_hw = o_push = o_hl = o_fl = 0.0
-        u_fw = u_hw = u_push = u_hl = u_fl = 0.0
-
-        n = matriz.shape[0]
-        for i in range(n):
-            for j in range(n):
-                prob_ij = float(matriz[i, j])
-                goles = i + j
-
-                so1 = _liquidar_estado_unidad(goles - t1)
-                so2 = _liquidar_estado_unida
     with tab_ref2:
         st.markdown("Calcula la línea esperada de tarjetas combinando los promedios del colegiado con la tendencia tarjetera de ambos equipos.")
         if not (err_partidos or df_partidos_global.empty):
@@ -10440,555 +11479,3 @@ elif menu_seleccionado == "🧮 Hándicap Asiático Avanzado":
 
 elif menu_seleccionado == "🎯 Escáner Autónomo de Ineficiencias (+EV Scanner)":
     ev_render_modulo()
-
-elif menu_seleccionado == "🔗 Constructor Combinadas (EV+)":
-    st.title("🔗 Constructor Automático de Combinadas (EV+)")
-    st.markdown("Calcula el valor esperado (EV) acumulado y la cuota total de tus apuestas combinadas.")
-    col_c1, col_c2 = st.columns(2)
-    with col_c1: c1, p1 = st.number_input("Cuota Selección 1:", value=1.50), st.number_input("Prob Real 1 (%):", value=70.0)/100
-    with col_c2: c2, p2 = st.number_input("Cuota Selección 2:", value=1.80), st.number_input("Prob Real 2 (%):", value=60.0)/100
-    ev = round(((p1*p2) * (c1*c2) - 1) * 100, 2)
-    st.markdown("---")
-    st.metric("Cuota Combinada", f"{round(c1*c2, 2)}")
-    st.metric("Probabilidad Conjunta", f"{p1*p2*100:.1f}%")
-    if ev > 0: st.success(f"🔥 Combinada con Valor Esperado Positivo (EV+): +{ev}%")
-    else: st.error(f"⚠️ Combinada sin Valor Esperado (EV-): {ev}%")
-
-elif menu_seleccionado == "💸 Calculadora & Kelly":
-    st.title("💸 Calculadora de Criterio de Kelly")
-    st.markdown("Gestión matemática de Bankroll para maximizar ganancias y proteger tu capital.")
-    bank = st.number_input("Bankroll Total (€):", value=100.0, step=10.0)
-    cuota = st.number_input("Cuota de la Apuesta:", value=1.85, step=0.05)
-    prob = st.slider("Probabilidad Estimada por Modelo (%):", 10.0, 99.0, 60.0) / 100.0
-    b = cuota - 1.0
-    k = (prob * b - (1 - prob)) / b if b > 0 else 0
-    col_k1, col_k2 = st.columns(2)
-    col_k1.metric("Stake Recomendado (Medio Kelly - Seguro)", f"{max(bank * (k * 0.5), 0):.2f} €", f"{((max(bank * (k * 0.5), 0))/bank*100):.1f}% del bank")
-    col_k2.metric("Stake Máximo (Kelly Completo - Agresivo)", f"{max(bank * k, 0):.2f} €", f"{((max(bank * k, 0))/bank*100):.1f}% del bank")
-
-elif menu_seleccionado == "🤖 Asistente IA Local":
-    st.markdown(
-        """
-        <style>
-        .stChatFloatingInputContainer,
-        div[data-testid="stBottom"],
-        div[data-testid="stBottom"] > div,
-        footer {
-            background-color: #0e1117 !important;
-            background: #0e1117 !important;
-        }
-        div[data-testid="stChatInput"] {
-            background-color: #1a1d27 !important;
-            border: 1px solid #2d3345 !important;
-            border-radius: 12px !important;
-        }
-        div[data-testid="stChatInput"] textarea {
-            background-color: transparent !important;
-            color: #ffffff !important;
-        }
-        div[data-testid="stChatInput"] button {
-            color: #00d26a !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
-
-    import os
-    try:
-        from google import genai
-        _GENAI_SDK_OK = True
-    except Exception:
-        genai = None
-        _GENAI_SDK_OK = False
-
-    try:
-        from google.genai import types as genai_types
-    except Exception:
-        genai_types = None
-
-    st.title("🤖 Asistente Cuantitativo de Élite (Google AI Studio)")
-    st.caption(
-        "Motor Cuantitativo `gemini-3.8-flash` (Streaming en Tiempo Real) · RAG Dinámico sobre `macro_base_futbol.db` · "
-        "Calibración de Poisson, Valor Esperado (EV+), Hándicap Asiático y Fricción Arbitral."
-    )
-
-    # ── 1. INICIALIZACIÓN RESILIENTE DE CLAVE API Y CLIENTE GOOGLE GENAI ─────
-    clave_entorno = ""
-    try:
-        clave_entorno = st.secrets.get("GEMINI_API_KEY", "") or ""
-    except Exception:
-        clave_entorno = ""
-    if not clave_entorno:
-        clave_entorno = os.getenv("GEMINI_API_KEY", "") or ""
-
-    clave_activa = clave_entorno.strip()
-    if not clave_activa:
-        st.info(
-            "🔐 **Autenticación Google AI Studio requerida:** Introduce tu clave API de Gemini "
-            "(o defínela en `st.secrets['GEMINI_API_KEY']` / variable de entorno `GEMINI_API_KEY`) "
-            "para habilitar la inferencia en vivo con `gemini-3.8-flash`."
-        )
-        clave_input = st.text_input(
-            "🔑 Clave API de Google AI Studio:",
-            type="password",
-            placeholder="AIzaSy...",
-            key="input_gemini_api_key_asistente",
-        )
-        clave_activa = (clave_input or "").strip()
-
-    # ── 2. PERSONA DE DOMINIO CUANTITATIVO (SYSTEM INSTRUCTION) ──────────────
-    SYSTEM_INSTRUCTION_BASE = (
-        "Eres el Asistente Cuantitativo de Élite de BigData Football.\n"
-        "Especialidad: Detección de Valor Esperado (EV+), arbitraje de cuotas, calibración de Poisson y fricción arbitral.\n"
-        "Directrices de respuesta:\n"
-        "- Sé ejecutivo y directo. Limita el análisis a 3 apartados breves con viñetas: "
-        "1) Cuotas Justas vs Mercado, 2) Tendencia xG y Goles, 3) Recomendación Cuantitativa de Valor (EV+).\n"
-        "- Rigor matemático y enfoque directo.\n"
-        "- Prohibido el uso de jerga matemática cruda innecesaria (nada de lambda 'λ' ni '@' antes de cuotas).\n"
-        "- Si hay datos de la base de datos inyectados en la consulta, priorízalos sobre conocimiento general.\n"
-        "- Ofrece siempre conclusiones de mercado claras (apuesta con valor vs mercado sobrevalorado)."
-    )
-
-    # ── Inicialización de memoria multi-turno ────────────────────────────────
-    if "chat_asistente_ia" not in st.session_state:
-        st.session_state.chat_asistente_ia = []
-    if "ia_chat_history" not in st.session_state:
-        st.session_state["ia_chat_history"] = st.session_state.chat_asistente_ia
-
-    # ── Helpers de Extracción Cuantitativa en Tiempo Real (SQLite RAG Lite) ──
-    def _extraer_perfil_equipo_sqlite(df_scope: pd.DataFrame, equipo: str) -> dict:
-        """
-        Extrae de macro_base_futbol.db (vía DataFrame validado o consulta directa SQLite)
-        los últimos 5 partidos (resultados, goles, rival, córners, tarjetas) y los
-        promedios de temporada (goles a favor/en contra, córners, faltas y tarjetas).
-        """
-        perfil = {
-            "equipo": equipo,
-            "partidos_analizados": 0,
-            "promedios_temporada": {
-                "goles_marcados": 0.0,
-                "goles_encajados": 0.0,
-                "xg_favor": 0.0,
-                "xg_contra": 0.0,
-                "corners_favor": 0.0,
-                "corners_contra": 0.0,
-                "corners_totales_partido": 0.0,
-                "amarillas_propias": 0.0,
-                "rojas_propias": 0.0,
-                "tarjetas_totales_partido": 0.0,
-                "faltas_cometidas": 0.0,
-                "over25_pct": 0.0,
-                "btts_pct": 0.0,
-            },
-            "ultimos_5_partidos": [],
-        }
-        if df_scope is None or df_scope.empty or not equipo or equipo == "Ninguno (Consulta General)":
-            return perfil
-        if "HomeTeam" not in df_scope.columns or "AwayTeam" not in df_scope.columns:
-            return perfil
-
-        mask = (df_scope["HomeTeam"] == equipo) | (df_scope["AwayTeam"] == equipo)
-        df_eq = df_scope[mask].copy()
-        if df_eq.empty:
-            return perfil
-
-        if "Date" in df_eq.columns:
-            df_eq["_dt_ord"] = pd.to_datetime(df_eq["Date"], errors="coerce", dayfirst=True)
-            df_eq = df_eq.sort_values(by="_dt_ord", ascending=True, kind="stable")
-
-        for col_n in ("FTHG", "FTAG", "HC", "AC", "HY", "AY", "HR", "AR", "HF", "AF", "HxG", "AxG"):
-            if col_n in df_eq.columns:
-                df_eq[col_n] = pd.to_numeric(df_eq[col_n], errors="coerce")
-
-        if "FTHG" in df_eq.columns and "FTAG" in df_eq.columns:
-            df_eq = df_eq.dropna(subset=["FTHG", "FTAG"]).copy()
-        if df_eq.empty:
-            return perfil
-
-        es_local = df_eq["HomeTeam"] == equipo
-        gf_s = np.where(es_local, df_eq["FTHG"], df_eq["FTAG"])
-        ga_s = np.where(es_local, df_eq["FTAG"], df_eq["FTHG"])
-
-        if "HxG" in df_eq.columns and "AxG" in df_eq.columns:
-            xgf_s = pd.Series(np.where(es_local, df_eq["HxG"], df_eq["AxG"])).dropna()
-            xgc_s = pd.Series(np.where(es_local, df_eq["AxG"], df_eq["HxG"])).dropna()
-        else:
-            xgf_s, xgc_s = pd.Series(dtype=float), pd.Series(dtype=float)
-
-        cf_s = pd.Series(np.where(es_local, df_eq["HC"], df_eq["AC"])).dropna() if {"HC", "AC"}.issubset(df_eq.columns) else pd.Series(dtype=float)
-        cc_s = pd.Series(np.where(es_local, df_eq["AC"], df_eq["HC"])).dropna() if {"HC", "AC"}.issubset(df_eq.columns) else pd.Series(dtype=float)
-        am_s = pd.Series(np.where(es_local, df_eq["HY"], df_eq["AY"])).dropna() if {"HY", "AY"}.issubset(df_eq.columns) else pd.Series(dtype=float)
-        am_riv_s = pd.Series(np.where(es_local, df_eq["AY"], df_eq["HY"])).dropna() if {"HY", "AY"}.issubset(df_eq.columns) else pd.Series(dtype=float)
-        roj_s = pd.Series(np.where(es_local, df_eq["HR"], df_eq["AR"])).dropna() if {"HR", "AR"}.issubset(df_eq.columns) else pd.Series(dtype=float)
-        fal_s = pd.Series(np.where(es_local, df_eq["HF"], df_eq["AF"])).dropna() if {"HF", "AF"}.issubset(df_eq.columns) else pd.Series(dtype=float)
-
-        n_part = len(df_eq)
-        gf_med = float(np.nanmean(gf_s)) if n_part > 0 else 0.0
-        ga_med = float(np.nanmean(ga_s)) if n_part > 0 else 0.0
-        cf_med = float(cf_s.mean()) if not cf_s.empty else 0.0
-        cc_med = float(cc_s.mean()) if not cc_s.empty else 0.0
-        am_med = float(am_s.mean()) if not am_s.empty else 0.0
-        am_riv_med = float(am_riv_s.mean()) if not am_riv_s.empty else 0.0
-        roj_med = float(roj_s.mean()) if not roj_s.empty else 0.0
-
-        perfil["partidos_analizados"] = int(n_part)
-        perfil["promedios_temporada"] = {
-            "goles_marcados": round(gf_med, 2),
-            "goles_encajados": round(ga_med, 2),
-            "xg_favor": round(float(xgf_s.mean()), 2) if not xgf_s.empty else round(gf_med, 2),
-            "xg_contra": round(float(xgc_s.mean()), 2) if not xgc_s.empty else round(ga_med, 2),
-            "corners_favor": round(cf_med, 2),
-            "corners_contra": round(cc_med, 2),
-            "corners_totales_partido": round(cf_med + cc_med, 2),
-            "amarillas_propias": round(am_med, 2),
-            "rojas_propias": round(roj_med, 2),
-            "tarjetas_totales_partido": round(am_med + am_riv_med + roj_med, 2),
-            "faltas_cometidas": round(float(fal_s.mean()), 2) if not fal_s.empty else 11.5,
-            "over25_pct": round(float(np.mean((gf_s + ga_s) > 2.5) * 100.0), 1),
-            "btts_pct": round(float(np.mean((gf_s > 0) & (ga_s > 0)) * 100.0), 1),
-        }
-
-        ult_5 = df_eq.tail(5)
-        lista_u5 = []
-        for _, r in ult_5.iterrows():
-            loc = r["HomeTeam"] == equipo
-            rival = str(r["AwayTeam"] if loc else r["HomeTeam"])
-            cond = "Local" if loc else "Visitante"
-            gf_i = int(float(r["FTHG"] if loc else r["FTAG"]))
-            ga_i = int(float(r["FTAG"] if loc else r["FTHG"]))
-            res_letra = "V" if gf_i > ga_i else ("E" if gf_i == ga_i else "D")
-            c_tot = (
-                int(float(r.get("HC", 0) or 0) + float(r.get("AC", 0) or 0))
-                if pd.notna(r.get("HC")) and pd.notna(r.get("AC"))
-                else None
-            )
-            t_tot = (
-                int(float(r.get("HY", 0) or 0) + float(r.get("AY", 0) or 0) + float(r.get("HR", 0) or 0) + float(r.get("AR", 0) or 0))
-                if pd.notna(r.get("HY")) and pd.notna(r.get("AY"))
-                else None
-            )
-            fecha_str = str(r.get("Date", "S/F"))
-            extra_stats = []
-            if c_tot is not None:
-                extra_stats.append(f"{c_tot} córners")
-            if t_tot is not None:
-                extra_stats.append(f"{t_tot} tarjetas")
-            sufijo = f" ({', '.join(extra_stats)})" if extra_stats else ""
-            lista_u5.append(
-                f"{fecha_str} [{cond}] vs {rival}: {gf_i}-{ga_i} ({res_letra}){sufijo}"
-            )
-        perfil["ultimos_5_partidos"] = lista_u5
-        return perfil
-
-    # ── 3. INYECCIÓN DINÁMICA DE CONTEXTO SQLITE (RAG LITE) ──────────────────
-    df_base_ia = df_partidos_global
-    if (df_base_ia is None or df_base_ia.empty) and RUTA_BD.exists():
-        try:
-            with sqlite3.connect(RUTA_BD) as _conn_ia:
-                _df_sql_ia = pd.read_sql("SELECT * FROM historico_reciente", _conn_ia)
-                _df_sql_ia.columns = _df_sql_ia.columns.str.replace("\ufeff", "").str.replace("ï»¿", "").str.strip()
-                df_base_ia = _df_sql_ia
-        except Exception:
-            df_base_ia = pd.DataFrame()
-
-    col_div_ia = next(
-        (c for c in ("Div", "Liga_Origen") if c in df_base_ia.columns),
-        next((c for c in df_base_ia.columns if "Div" in str(c)), None),
-    ) if not df_base_ia.empty else None
-
-    divs_ia = (
-        [d for d in MAPA_LIGAS if d in set(df_base_ia[col_div_ia].dropna().astype(str))]
-        if col_div_ia
-        else list(MAPA_LIGAS.keys())
-    )
-    opciones_liga_ia = [MAPA_LIGAS[d] for d in divs_ia] if divs_ia else list(MAPA_LIGAS.values())
-
-    ctx_c1, ctx_c2, ctx_c3, ctx_c4 = st.columns([1.3, 1.3, 1.3, 1.1])
-    with ctx_c1:
-        liga_ia_sel = st.selectbox("🏆 Competición (MAPA_LIGAS):", opciones_liga_ia, index=0, key="ia_ctx_liga")
-    div_ia_code = MAPA_INV.get(liga_ia_sel, "SP1")
-
-    df_liga_ia = (
-        df_base_ia[df_base_ia[col_div_ia].astype(str) == div_ia_code].copy()
-        if not df_base_ia.empty and col_div_ia
-        else df_base_ia.copy()
-    )
-    equipos_ia = (
-        sorted(pd.concat([df_liga_ia["HomeTeam"], df_liga_ia["AwayTeam"]]).dropna().unique().tolist())
-        if not df_liga_ia.empty and {"HomeTeam", "AwayTeam"}.issubset(df_liga_ia.columns)
-        else []
-    )
-
-    with ctx_c2:
-        opciones_local_ia = equipos_ia if equipos_ia else ["Sin datos"]
-        home_ia = st.selectbox("🏠 Equipo Principal / Local:", opciones_local_ia, index=0, key=f"ia_ctx_h_{div_ia_code}")
-    with ctx_c3:
-        rivales_ia = [e for e in equipos_ia if e != home_ia]
-        opciones_visit_ia = rivales_ia + ["Ninguno (Solo Equipo Principal)"] if rivales_ia else ["Ninguno (Solo Equipo Principal)"]
-        away_ia = st.selectbox("✈️ Rival / Visitante (Opcional):", opciones_visit_ia, index=0, key=f"ia_ctx_a_{div_ia_code}")
-
-    censo_ia = _obtener_censo_global_arbitros(df_partidos_global)
-    arbs_ia_disp = ["🔍 Seleccionar o buscar árbitro..."] + [
-        item["etiqueta_selector"] for item in sorted(censo_ia.values(), key=lambda x: x["nombre"])
-    ]
-    with ctx_c4:
-        arb_ia = st.selectbox("⚖️ Árbitro:", arbs_ia_disp, index=0, key=f"ia_ctx_ref_{div_ia_code}")
-
-    # Extracción de estadísticas reales desde macro_base_futbol.db
-    perfil_h = _extraer_perfil_equipo_sqlite(df_liga_ia, home_ia)
-    hay_visitante = away_ia and away_ia != "Ninguno (Solo Equipo Principal)" and away_ia != "Sin datos"
-    perfil_a = _extraer_perfil_equipo_sqlite(df_liga_ia, away_ia) if hay_visitante else None
-
-    prom_h = perfil_h["promedios_temporada"]
-    prom_a = perfil_a["promedios_temporada"] if perfil_a else None
-
-    # Calibración Poisson y cuotas justas para el contexto
-    if prom_a and perfil_a["partidos_analizados"] > 0:
-        exp_g_h = round(max(0.25, (prom_h["xg_favor"] + prom_a["xg_contra"]) / 2.0), 2)
-        exp_g_a = round(max(0.25, (prom_a["xg_favor"] + prom_h["xg_contra"]) / 2.0), 2)
-    else:
-        exp_g_h = round(max(0.25, prom_h["xg_favor"] or 1.35), 2)
-        exp_g_a = round(max(0.25, prom_h["xg_contra"] or 1.15), 2)
-
-    p_1 = p_x = p_2 = p_o25 = p_btts = 0.0
-    for _g1 in range(8):
-        for _g2 in range(8):
-            _pr = calcular_probabilidad_poisson(exp_g_h, _g1) * calcular_probabilidad_poisson(exp_g_a, _g2)
-            if _g1 > _g2:
-                p_1 += _pr
-            elif _g1 == _g2:
-                p_x += _pr
-            else:
-                p_2 += _pr
-            if (_g1 + _g2) > 2.5:
-                p_o25 += _pr
-            if _g1 > 0 and _g2 > 0:
-                p_btts += _pr
-
-    p_u25 = max(0.0, 1.0 - p_o25)
-    cuota_justa_1 = round(1.0 / max(p_1, 0.01), 2)
-    cuota_justa_x = round(1.0 / max(p_x, 0.01), 2)
-    cuota_justa_2 = round(1.0 / max(p_2, 0.01), 2)
-    cuota_justa_o25 = round(1.0 / max(p_o25, 0.01), 2)
-    cuota_justa_u25 = round(1.0 / max(p_u25, 0.01), 2)
-    cuota_justa_btts = round(1.0 / max(p_btts, 0.01), 2)
-
-    # Proyección de Hándicap Asiático -0.5 / +0.5 y DNB (0.0)
-    prob_ah_local_0 = p_1 / max(p_1 + p_2, 0.01)
-    cuota_justa_ah0_local = round(1.0 / max(prob_ah_local_0, 0.01), 2)
-    cuota_justa_ah0_visit = round(1.0 / max(1.0 - prob_ah_local_0, 0.01), 2)
-
-    perfil_arb_ia = _calcular_perfil_disciplinario_arbitro(
-        nombre_arbitro=arb_ia,
-        censo_global=censo_ia,
-        df_partidos_global=df_partidos_global,
-        div_partido=div_ia_code,
-    )
-    tarj_arb_ia = float(perfil_arb_ia.get("media_amarillas", 4.10))
-    faltas_arb_ia = float(perfil_arb_ia.get("media_faltas", 22.5))
-    perfil_arb_txt = str(perfil_arb_ia.get("severidad_label", "🟡 Estándar UEFA"))
-
-    friccion_faltas_ia = round(
-        prom_h["faltas_cometidas"] + (prom_a["faltas_cometidas"] if prom_a else prom_h["faltas_cometidas"]),
-        1,
-    )
-    tarjetas_proy_partido = round(
-        ((prom_h["amarillas_propias"] + (prom_a["amarillas_propias"] if prom_a else 2.2)) + tarj_arb_ia) / 2.0,
-        2,
-    )
-    corners_proy_partido = round(
-        prom_h["corners_favor"] + (prom_a["corners_favor"] if prom_a else prom_h["corners_contra"]),
-        2,
-    )
-
-    etiqueta_duelo = f"{home_ia} vs {away_ia}" if hay_visitante else home_ia
-
-    resumen_dict = {
-        "origen": "macro_base_futbol.db",
-        "competicion": liga_ia_sel,
-        "codigo_liga": div_ia_code,
-        "emparejamiento": etiqueta_duelo,
-        "equipo_local": perfil_h,
-        "equipo_visitante": perfil_a if (perfil_a and perfil_a["partidos_analizados"] > 0) else "Análisis individual",
-        "calibracion_poisson_cuotas_justas": {
-            "goles_esperados_local": exp_g_h,
-            "goles_esperados_visitante": exp_g_a,
-            "goles_esperados_totales": round(exp_g_h + exp_g_a, 2),
-            "corners_esperados_totales": corners_proy_partido,
-            "1X2": {
-                "prob_1_pct": round(p_1 * 100, 1),
-                "cuota_justa_1": cuota_justa_1,
-                "prob_X_pct": round(p_x * 100, 1),
-                "cuota_justa_X": cuota_justa_x,
-                "prob_2_pct": round(p_2 * 100, 1),
-                "cuota_justa_2": cuota_justa_2,
-            },
-            "goles_y_btts": {
-                "prob_over_2_5_pct": round(p_o25 * 100, 1),
-                "cuota_justa_over_2_5": cuota_justa_o25,
-                "prob_under_2_5_pct": round(p_u25 * 100, 1),
-                "cuota_justa_under_2_5": cuota_justa_u25,
-                "prob_btts_pct": round(p_btts * 100, 1),
-                "cuota_justa_btts": cuota_justa_btts,
-            },
-            "handicap_asiatico": {
-                "ah_0_0_local_cuota_justa": cuota_justa_ah0_local,
-                "ah_0_0_visitante_cuota_justa": cuota_justa_ah0_visit,
-                "ah_menos_0_5_local_cuota_justa": cuota_justa_1,
-                "ah_mas_0_5_visitante_cuota_justa": round(1.0 / max(p_x + p_2, 0.01), 2),
-            },
-        },
-        "arbitro_y_disciplina": {
-            "colegiado": str(perfil_arb_ia.get("nombre", arb_ia)),
-            "perfil_rigor": perfil_arb_txt,
-            "media_amarillas_arbitro": round(tarj_arb_ia, 2),
-            "media_faltas_arbitro": round(faltas_arb_ia, 1),
-            "friccion_combinada_faltas": friccion_faltas_ia,
-            "proyeccion_tarjetas_totales": tarjetas_proy_partido,
-        },
-    }
-
-    contexto_compacto_str = json.dumps(resumen_dict, ensure_ascii=False, separators=(",", ":"))
-
-    # ── 4. QUICK PROMPT PRESETS (ANÁLISIS EN UN CLIC) + REINICIAR SESIÓN ────
-    st.markdown("##### ⚡ Acciones Rápidas de Análisis Cuantitativo")
-    qp1, qp2, qp3, qp4, qp5 = st.columns([2.2, 2.5, 2.4, 2.5, 1.6])
-    prompt_preset_activo = None
-
-    with qp1:
-        if st.button("🎯 Evaluar Valor 1X2", width="stretch", key="btn_preset_1x2"):
-            prompt_preset_activo = (
-                f"🎯 Evaluar Valor 1X2 para {etiqueta_duelo} ({liga_ia_sel}): "
-                "compara las probabilidades reales y cuotas justas de victoria local, empate y visitante "
-                "según los últimos 5 partidos y medias de temporada, e indica dónde reside el valor esperado."
-            )
-    with qp2:
-        if st.button("🔥 Análisis de Goles (Over/Under 2.5)", width="stretch", key="btn_preset_goles"):
-            prompt_preset_activo = (
-                f"🔥 Análisis de Goles (Over/Under 2.5) y Ambos Marcan para {etiqueta_duelo}: "
-                "evalúa los promedios de goles marcados y encajados, tendencia en los últimos 5 partidos, "
-                "córners y cuota justa del mercado de goles."
-            )
-    with qp3:
-        if st.button("🟨 Riesgo Disciplinario y Tarjetas", width="stretch", key="btn_preset_tarjetas"):
-            prompt_preset_activo = (
-                f"🟨 Riesgo Disciplinario y Tarjetas en {etiqueta_duelo} con el árbitro {arb_ia}: "
-                "analiza las medias de tarjetas amarillas, rojas, faltas cometidas por ambos equipos y "
-                "el rigor del colegiado para determinar qué línea de tarjetas tiene valor."
-            )
-    with qp4:
-        if st.button("⚡ Proyección de Hándicap Asiático", width="stretch", key="btn_preset_ah"):
-            prompt_preset_activo = (
-                f"⚡ Proyección de Hándicap Asiático para {etiqueta_duelo}: "
-                "evalúa las líneas asiáticas de referencia (0.0, -0.5 y +0.5) en función de la superioridad "
-                "ofensiva/defensiva y recomienda la cobertura óptima de mercado."
-            )
-    with qp5:
-        if st.button("🗑️ Reiniciar Sesión", width="stretch", key="btn_clear_chat_ia"):
-            st.session_state.chat_asistente_ia = []
-            st.session_state["ia_chat_history"] = st.session_state.chat_asistente_ia
-            st.rerun()
-
-    # ── 5. INTERFAZ DE CHAT MULTI-TURNO CON STREAMING EN TIEMPO REAL ─────────
-    for msg in st.session_state.chat_asistente_ia:
-        rol_vista = "assistant" if msg.get("role") in ("assistant", "model") else "user"
-        with st.chat_message(rol_vista):
-            if msg.get("badge"):
-                st.caption(msg["badge"])
-            st.markdown(msg.get("content", ""))
-
-    input_chat_usuario = st.chat_input("Consulta métricas, valor esperado, árbitros o cuotas...")
-    consulta_usuario_final = prompt_preset_activo or input_chat_usuario
-
-    if consulta_usuario_final:
-        st.session_state.chat_asistente_ia.append({"role": "user", "content": consulta_usuario_final})
-        st.session_state["ia_chat_history"] = st.session_state.chat_asistente_ia
-        with st.chat_message("user"):
-            st.markdown(consulta_usuario_final)
-
-        with st.chat_message("assistant"):
-            if not _GENAI_SDK_OK or genai is None:
-                st.error(
-                    "⚠️ El paquete oficial `google-genai` no está disponible en el entorno Python activo. "
-                    "Instálalo mediante `pip install google-genai`."
-                )
-            elif not clave_activa:
-                st.error(
-                    "🔑 Introduce una Clave API válida de Google AI Studio en el campo superior "
-                    "(o configura `GEMINI_API_KEY` en `st.secrets` / variables de entorno) para consultar a `gemini-3.8-flash`."
-                )
-            else:
-                try:
-                    client = genai.Client(api_key=clave_activa)
-
-                    # Historial breve de últimos turnos para preservar memoria sin penalizar latencia
-                    turnos_previos = st.session_state.chat_asistente_ia[-5:-1]
-                    resumen_historial = "\n".join(
-                        f"{'Analista' if m.get('role') == 'user' else 'Asistente'}: {m.get('content', '')}"
-                        for m in turnos_previos
-                        if m.get("content")
-                    )
-                    bloque_historial = f"\nHISTORIAL_RECIENTE:\n{resumen_historial}\n" if resumen_historial else ""
-
-                    full_prompt = (
-                        f"{SYSTEM_INSTRUCTION_BASE}\n\n"
-                        f"DATOS_SQLITE_MACRO_BASE:\n{contexto_compacto_str}"
-                        f"{bloque_historial}\n"
-                        f"CONSULTA_ACTUAL:\n{consulta_usuario_final}"
-                    )
-
-                    modelo_stream_usado = ["gemini-3.8-flash"]
-
-                    def generar_stream_asistente(full_prompt):
-                        try:
-                            modelo_stream_usado[0] = "gemini-3.8-flash"
-                            response_stream = client.models.generate_content_stream(
-                                model='gemini-3.8-flash',
-                                contents=full_prompt,
-                            )
-                            for chunk in response_stream:
-                                if chunk.text:
-                                    yield chunk.text
-                        except Exception:
-                            try:
-                                modelo_stream_usado[0] = "gemini-2.0-flash"
-                                response_stream = client.models.generate_content_stream(
-                                    model='gemini-2.0-flash',
-                                    contents=full_prompt,
-                                )
-                                for chunk in response_stream:
-                                    if chunk.text:
-                                        yield chunk.text
-                            except Exception:
-                                modelo_stream_usado[0] = "gemini-2.5-flash"
-                                response_stream = client.models.generate_content_stream(
-                                    model='gemini-2.5-flash',
-                                    contents=full_prompt,
-                                )
-                                for chunk in response_stream:
-                                    if chunk.text:
-                                        yield chunk.text
-
-                    respuesta_completa = st.write_stream(generar_stream_asistente(full_prompt))
-                    texto_final = str(respuesta_completa or "").strip()
-                    if texto_final:
-                        badge_ok = f"🟢 Google AI Studio (`{modelo_stream_usado[0]}` · Streaming) · Contexto SQLite: {etiqueta_duelo}"
-                        st.caption(badge_ok)
-                        st.session_state.chat_asistente_ia.append(
-                            {
-                                "role": "assistant",
-                                "content": texto_final,
-                                "badge": badge_ok,
-                            }
-                        )
-                        st.session_state["ia_chat_history"] = st.session_state.chat_asistente_ia
-                except genai.errors.APIError as api_err:
-                    st.error(
-                        f"🚫 Error de la API de Google AI Studio (`APIError`): {api_err}. "
-                        "Verifica la validez de tu clave API, los permisos del proyecto o el límite de cuota."
-                    )
-                except Exception as exc_gen:
-                    st.error(
-                        f"⚠️ Error inesperado al conectar con Google AI Studio: {exc_gen}"
-                    )
