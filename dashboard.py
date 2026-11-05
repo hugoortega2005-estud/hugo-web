@@ -5848,6 +5848,102 @@ elif menu_seleccionado == "📊 Dossier de Equipo":
         st.warning("No hay datos de partidos disponibles en la base de datos.")
     else:
         # ── LAYER 3.1: TOP EXECUTIVE CONTROL (COMPETICIÓN + EQUIPO + HORIZONTE) ──
+        st.markdown("""
+<style>
+/* 1. BaseWeb SelectBox (Caja cerrada y contenedores internos) */
+div[data-baseweb="select"],
+div[data-baseweb="select"] > div,
+div[data-baseweb="select"] div,
+div[data-baseweb="select"] input {
+    background-color: #0f172a !important;
+    color: #f8fafc !important;
+    border-color: rgba(99, 102, 241, 0.35) !important;
+    border-radius: 8px !important;
+}
+div[data-baseweb="select"] span,
+div[data-baseweb="select"] div[aria-selected="true"] {
+    color: #f8fafc !important;
+}
+div[data-baseweb="select"] svg {
+    fill: #38bdf8 !important;
+}
+
+/* 2. Menú desplegable flotante (BaseWeb Popover Portal en body) */
+div[data-baseweb="popover"],
+div[data-baseweb="popover"] > div,
+div[data-baseweb="popover"] ul,
+ul[role="listbox"] {
+    background-color: #0f172a !important;
+    border: 1px solid rgba(99, 102, 241, 0.35) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6) !important;
+}
+li[role="option"] {
+    background-color: #0f172a !important;
+    color: #cbd5e1 !important;
+    font-size: 0.85rem !important;
+    padding: 8px 14px !important;
+    transition: background-color 0.15s ease !important;
+}
+li[role="option"]:hover,
+li[aria-selected="true"] {
+    background-color: rgba(56, 189, 248, 0.18) !important;
+    color: #38bdf8 !important;
+}
+
+/* 3. Botones de Navegación Superior (Atrás, Portada) */
+div[data-testid="stHorizontalBlock"] button {
+    background: rgba(15, 23, 42, 0.75) !important;
+    border: 1px solid rgba(99, 102, 241, 0.3) !important;
+    color: #cbd5e1 !important;
+    border-radius: 8px !important;
+    font-weight: 500 !important;
+    transition: all 0.2s ease !important;
+}
+div[data-testid="stHorizontalBlock"] button:hover {
+    background: rgba(56, 189, 248, 0.15) !important;
+    border-color: #38bdf8 !important;
+    color: #38bdf8 !important;
+}
+
+/* 4. Selector de Horizonte Muestral en Píldoras Horizontales */
+div[data-testid="stRadio"] > div[role="radiogroup"] {
+    display: flex !important;
+    flex-direction: row !important;
+    gap: 6px !important;
+    background: rgba(15, 23, 42, 0.75) !important;
+    padding: 4px !important;
+    border-radius: 8px !important;
+    border: 1px solid rgba(99, 102, 241, 0.25) !important;
+}
+div[data-testid="stRadio"] label {
+    background: transparent !important;
+    padding: 6px 12px !important;
+    border-radius: 6px !important;
+    margin: 0 !important;
+    cursor: pointer !important;
+    border: 1px solid transparent !important;
+    transition: all 0.2s ease !important;
+}
+div[data-testid="stRadio"] label > div:first-child {
+    display: none !important; /* Oculta el círculo nativo */
+}
+div[data-testid="stRadio"] label p {
+    color: #94a3b8 !important;
+    font-size: 0.78rem !important;
+    margin: 0 !important;
+}
+div[data-testid="stRadio"] label:has(input:checked) {
+    background: rgba(56, 189, 248, 0.18) !important;
+    border-color: rgba(56, 189, 248, 0.45) !important;
+}
+div[data-testid="stRadio"] label:has(input:checked) p {
+    color: #38bdf8 !important;
+    font-weight: 700 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
         ctrl_d0, ctrl_d1, ctrl_d2 = st.columns([1.3, 1.3, 2.2])
         with ctrl_d0:
             comp_dossier_sel = st.selectbox(
@@ -6370,12 +6466,7 @@ elif menu_seleccionado == "📊 Dossier de Equipo":
                 "media_liga_global": media_liga_global,
             })
 
-            bar_info, bar_pdf = st.columns([3, 1])
-            with bar_info:
-                st.caption(
-                    f"📌 **Competición:** `{nombre_liga_ctx}` · **Horizonte activo:** `{horizonte_muestra}` · "
-                    f"**Muestra:** `{stats_global['n']} partidos` ({stats_home['n']} Casa / {stats_away['n']} Fuera)"
-                )
+            _, bar_pdf = st.columns([3, 1])
             with bar_pdf:
                 st.download_button(
                     "📄 Descargar Informe Ejecutivo (PDF)",
@@ -6750,17 +6841,68 @@ elif menu_seleccionado == "📊 Dossier de Equipo":
             col_d1, col_d2 = st.columns(2)
 
             with col_d1:
-                st.markdown("### 🕒 Historial de Últimos Resultados")
+                st.markdown("#### 🕒 Historial de Últimos Resultados")
                 if not df_norm_global.empty:
-                    for _, row in df_norm_global.iloc[::-1].head(6).iterrows():
-                        l_t, v_t = row["HomeTeam"], row["AwayTeam"]
-                        gl_t, gv_t = row["FTHG"], row["FTAG"]
-                        l_fmt = f"**{l_t}**" if l_t == equipo_elegido else l_t
-                        v_fmt = f"**{v_t}**" if v_t == equipo_elegido else v_t
-                        st.caption(
-                            f"📅 {row.get('Date', 'N/A')} | {l_fmt} {gl_t} - {gv_t} {v_fmt} "
-                            f"· xG: `{row['xg_f']:.2f} - {row['xg_c']:.2f}`"
-                        )
+                    ultimos_partidos_lista = []
+                    for _, _row_h in df_norm_global.iloc[::-1].head(6).iterrows():
+                        _es_loc_h = bool(_row_h.get("es_local", str(_row_h.get("HomeTeam", "")) == str(equipo_elegido)))
+                        ultimos_partidos_lista.append({
+                            'rival': str(_row_h.get("AwayTeam", "Rival") if _es_loc_h else _row_h.get("HomeTeam", "Rival")),
+                            'condicion': 'C' if _es_loc_h else 'F',
+                            'goles_favor': int(float(_row_h.get("gf", 0) or 0)),
+                            'goles_contra': int(float(_row_h.get("gc", 0) or 0)),
+                            'xg_favor': float(_row_h.get("xg_f", 0.0) or 0.0),
+                            'xg_contra': float(_row_h.get("xg_c", 0.0) or 0.0),
+                            'fecha': str(_row_h.get("Date", "N/A")),
+                        })
+
+                    partidos_feed_html = []
+                    for p in ultimos_partidos_lista:
+                        # Extracción defensiva de datos
+                        rival = p.get('rival', 'Rival')
+                        cond = p.get('condicion', 'C') # 'C' o 'F'
+                        g_fav = int(p.get('goles_favor', 0))
+                        g_con = int(p.get('goles_contra', 0))
+                        xg_fav = float(p.get('xg_favor', 0.0))
+                        xg_con = float(p.get('xg_contra', 0.0))
+                        fecha = str(p.get('fecha', ''))[:10]
+                        
+                        # Determinación de W / D / L
+                        if g_fav > g_con:
+                            res_color = "#10b981"
+                            res_badge = "W"
+                            res_bg = "rgba(16, 185, 129, 0.15)"
+                        elif g_fav == g_con:
+                            res_color = "#f59e0b"
+                            res_badge = "D"
+                            res_bg = "rgba(245, 158, 11, 0.15)"
+                        else:
+                            res_color = "#ef4444"
+                            res_badge = "L"
+                            res_bg = "rgba(239, 68, 68, 0.15)"
+                            
+                        vs_label = f"vs {rival}" if cond == 'C' else f"@ {rival}"
+                        marcador_txt = f"{g_fav} - {g_con}"
+                        
+                        xg_fav_color = "#34d399" if xg_fav >= xg_con else "#94a3b8"
+                        xg_con_color = "#ef4444" if xg_con > xg_fav else "#94a3b8"
+                        
+                        partidos_feed_html.append(f"""<div style="display: flex; align-items: center; justify-content: space-between; padding: 7px 12px; margin-bottom: 6px; background: rgba(15, 23, 42, 0.6); border-radius: 6px; border-left: 3px solid {res_color}; border-top: 1px solid rgba(255,255,255,0.03); border-right: 1px solid rgba(255,255,255,0.03); border-bottom: 1px solid rgba(255,255,255,0.03);">
+<div style="display: flex; align-items: center; gap: 9px;">
+<span style="font-size: 0.65rem; font-weight: 700; color: {res_color}; background: {res_bg}; padding: 2px 6px; border-radius: 4px;">{res_badge}</span>
+<span style="font-size: 0.72rem; color: #64748b; font-family: monospace;">{fecha}</span>
+<span style="font-size: 0.82rem; font-weight: 600; color: #e2e8f0;">{vs_label}</span>
+</div>
+<div style="display: flex; align-items: center; gap: 12px;">
+<span style="font-size: 0.88rem; font-weight: 700; font-family: monospace; color: #f8fafc; letter-spacing: 1px;">{marcador_txt}</span>
+<span style="font-size: 0.70rem; color: #64748b; font-family: monospace;">xG: <strong style="color: {xg_fav_color};">{xg_fav:.2f}</strong> - <strong style="color: {xg_con_color};">{xg_con:.2f}</strong></span>
+</div>
+</div>""")
+
+                    html_historial_total = f"""<div style="margin-top: 10px;">
+{"".join(partidos_feed_html)}
+</div>"""
+                    st.markdown(html_historial_total, unsafe_allow_html=True)
                 else:
                     st.info("Sin partidos recientes registrados.")
 
@@ -6768,19 +6910,61 @@ elif menu_seleccionado == "📊 Dossier de Equipo":
                 st.markdown("#### ⭐ Dependencia y Producción Individual (Top 5 en Minutos - Ratios P90)")
 
                 if df_censo_p90 is not None and not df_censo_p90.empty:
-                    st.dataframe(
-                        df_censo_p90[['jugador', 'posicion', 'minutos_jugados', 'sot_p90', 'faltas_p90', 'amarillas_p90']],
-                        column_config={
-                            "jugador": st.column_config.TextColumn("Jugador"),
-                            "posicion": st.column_config.TextColumn("Pos"),
-                            "minutos_jugados": st.column_config.NumberColumn("Minutos", format="%d'"),
-                            "sot_p90": st.column_config.NumberColumn("SOT P90", format="%.2f"),
-                            "faltas_p90": st.column_config.NumberColumn("Faltas P90", format="%.2f"),
-                            "amarillas_p90": st.column_config.NumberColumn("AM P90", format="%.2f"),
-                        },
-                        use_container_width=True,
-                        hide_index=True
-                    )
+                    lista_top_jugadores = []
+                    for _, _row_j in df_censo_p90.iterrows():
+                        lista_top_jugadores.append({
+                            'jugador': str(_row_j.get('jugador', 'Jugador')),
+                            'pos': str(_row_j.get('posicion', 'MC') or 'MC'),
+                            'minutos': int(float(_row_j.get('minutos_jugados', 0) or 0)),
+                            'sot_p90': float(_row_j.get('sot_p90', 0.0) or 0.0),
+                            'faltas_p90': float(_row_j.get('faltas_p90', 0.0) or 0.0),
+                            'am_p90': float(_row_j.get('amarillas_p90', 0.0) or 0.0),
+                        })
+
+                    filas_censo = []
+                    for jug in lista_top_jugadores:
+                        nombre = jug.get('jugador', 'Jugador')
+                        pos = jug.get('pos', 'MC')
+                        minutos = jug.get('minutos', 0)
+                        sot_p90 = float(jug.get('sot_p90', 0.0))
+                        faltas_p90 = float(jug.get('faltas_p90', 0.0))
+                        am_p90 = float(jug.get('am_p90', 0.0))
+                        
+                        # Asignación de color según demarcación
+                        pos_color = "#38bdf8" if "DF" in pos else ("#34d399" if "MC" in pos else "#f59e0b")
+                        
+                        # Resaltado condicional
+                        sot_style = "color: #38bdf8; font-weight: 700;" if sot_p90 >= 1.0 else "color: #cbd5e1;"
+                        faltas_style = "color: #fb923c; font-weight: 700;" if faltas_p90 >= 1.5 else "color: #cbd5e1;"
+                        am_style = "color: #facc15; font-weight: 700;" if am_p90 >= 0.20 else "color: #94a3b8;"
+                        
+                        filas_censo.append(f"""<tr style="border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 0.78rem;">
+<td style="padding: 7px 10px; font-weight: 600; color: #f1f5f9;">{nombre}</td>
+<td style="padding: 7px 10px;"><span style="font-size: 0.65rem; padding: 2px 5px; border-radius: 4px; background: rgba(255,255,255,0.05); color: {pos_color}; font-weight: 700;">{pos}</span></td>
+<td style="padding: 7px 10px; color: #94a3b8; font-family: monospace;">{minutos}'</td>
+<td style="padding: 7px 10px; font-family: monospace; {sot_style}">{sot_p90:.2f}</td>
+<td style="padding: 7px 10px; font-family: monospace; {faltas_style}">{faltas_p90:.2f}</td>
+<td style="padding: 7px 10px; font-family: monospace; {am_style}">{am_p90:.2f}</td>
+</tr>""")
+
+                    tabla_p90_html = f"""<div style="margin-top: 10px;">
+<table style="width: 100%; border-collapse: collapse; background: rgba(15, 23, 42, 0.65); border: 1px solid rgba(99, 102, 241, 0.22); border-radius: 8px; overflow: hidden;">
+<thead>
+<tr style="background: rgba(30, 41, 59, 0.85); color: #94a3b8; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.5px;">
+<th style="padding: 8px 10px; text-align: left;">Jugador</th>
+<th style="padding: 8px 10px; text-align: left;">Pos</th>
+<th style="padding: 8px 10px; text-align: left;">Min</th>
+<th style="padding: 8px 10px; text-align: left;">SOT P90</th>
+<th style="padding: 8px 10px; text-align: left;">Faltas P90</th>
+<th style="padding: 8px 10px; text-align: left;">AM P90</th>
+</tr>
+</thead>
+<tbody>
+{"".join(filas_censo)}
+</tbody>
+</table>
+</div>"""
+                    st.markdown(tabla_p90_html, unsafe_allow_html=True)
                 else:
                     st.info("Sin registros de censo telemétrico para este equipo en el rango temporal.")
 
@@ -6895,13 +7079,44 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
             df_base_ord_h2h = _ordenar_por_fecha(df_base_muestra_h2h)
             df_glob_ord_h2h = _ordenar_por_fecha(df_partidos_global)
 
-            df_eq1_home_full = df_base_ord_h2h[df_base_ord_h2h["HomeTeam"] == eq1].copy()
-            df_eq2_away_full = df_base_ord_h2h[df_base_ord_h2h["AwayTeam"] == eq2].copy()
-            df_eq1_all_full = df_glob_ord_h2h[
-                (df_glob_ord_h2h["HomeTeam"] == eq1) | (df_glob_ord_h2h["AwayTeam"] == eq1)
+            # Aislar estrictamente la temporada actual en curso
+            if "Temporada_Origen" in df_glob_ord_h2h.columns and not df_glob_ord_h2h["Temporada_Origen"].dropna().empty:
+                _temp_actual_h2h = str(df_glob_ord_h2h["Temporada_Origen"].dropna().astype(str).max())
+                if "Temporada_Origen" in df_base_ord_h2h.columns:
+                    _df_base_temp = df_base_ord_h2h[df_base_ord_h2h["Temporada_Origen"].astype(str) == _temp_actual_h2h].copy()
+                    if not _df_base_temp.empty:
+                        df_base_ord_h2h = _df_base_temp
+                _df_glob_temp = df_glob_ord_h2h[df_glob_ord_h2h["Temporada_Origen"].astype(str) == _temp_actual_h2h].copy()
+                if not _df_glob_temp.empty:
+                    df_glob_ord_h2h = _df_glob_temp
+
+            # Filtrar únicamente partidos ya disputados con telemetría válida
+            df_base_ord_h2h = df_base_ord_h2h.dropna(subset=['FTHG', 'FTAG'])
+            df_glob_ord_h2h = df_glob_ord_h2h.dropna(subset=['FTHG', 'FTAG'])
+            if 'HS' in df_base_ord_h2h.columns:
+                _df_tel_base = df_base_ord_h2h.dropna(subset=['HS', 'HST'])
+                df_telemetria_valida = _df_tel_base if not _df_tel_base.empty else df_base_ord_h2h
+            else:
+                df_telemetria_valida = df_base_ord_h2h
+
+            if 'HS' in df_glob_ord_h2h.columns:
+                _df_tel_glob = df_glob_ord_h2h.dropna(subset=['HS', 'HST'])
+                df_glob_telemetria_valida = _df_tel_glob if not _df_tel_glob.empty else df_glob_ord_h2h
+            else:
+                df_glob_telemetria_valida = df_glob_ord_h2h
+
+            df_eq1_home_full = df_telemetria_valida[df_telemetria_valida["HomeTeam"] == eq1].copy()
+            df_eq2_away_full = df_telemetria_valida[df_telemetria_valida["AwayTeam"] == eq2].copy()
+            _df_fuente_all_h2h = (
+                df_telemetria_valida
+                if modo_muestra_h2h == "Solo esta Competición (UEFA)"
+                else df_glob_telemetria_valida
+            )
+            df_eq1_all_full = _df_fuente_all_h2h[
+                (_df_fuente_all_h2h["HomeTeam"] == eq1) | (_df_fuente_all_h2h["AwayTeam"] == eq1)
             ].copy()
-            df_eq2_all_full = df_glob_ord_h2h[
-                (df_glob_ord_h2h["HomeTeam"] == eq2) | (df_glob_ord_h2h["AwayTeam"] == eq2)
+            df_eq2_all_full = _df_fuente_all_h2h[
+                (_df_fuente_all_h2h["HomeTeam"] == eq2) | (_df_fuente_all_h2h["AwayTeam"] == eq2)
             ].copy()
 
             if "Últimos N" in modo_muestra_h2h:
@@ -7388,23 +7603,38 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
                 df_eq2_all.tail(5) if relajo_vis else df_eq2_away.tail(int(n_homogeneo_h2h)),
                 eq2,
             )
-            _df_h2h_fb_home_all = _normalizar_partidos_equipo(
-                df_eq1_all_full[df_eq1_all_full["HomeTeam"] == eq1],
-                eq1,
-            )
-            _df_h2h_fb_away_all = _normalizar_partidos_equipo(
-                df_eq2_all_full[df_eq2_all_full["AwayTeam"] == eq2],
-                eq2,
-            )
-            if not _df_h2h_fb_home_all.empty and "corners_f" in _df_h2h_fb_home_all.columns:
-                _df_h2h_fb_home = _df_h2h_fb_home_all[_df_h2h_fb_home_all["corners_f"].notna()].tail(int(n_homogeneo_h2h)).copy()
-            else:
-                _df_h2h_fb_home = _df_h2h_fb_home_all.tail(int(n_homogeneo_h2h)).copy()
 
-            if not _df_h2h_fb_away_all.empty and "corners_f" in _df_h2h_fb_away_all.columns:
-                _df_h2h_fb_away = _df_h2h_fb_away_all[_df_h2h_fb_away_all["corners_f"].notna()].tail(int(n_homogeneo_h2h)).copy()
+            # Sellar fuga de df_fallback cuando se exige aislamiento de competición (UEFA)
+            if modo_muestra_h2h == "Solo esta Competición (UEFA)":
+                _df_h2h_fb_home = _df_h2h_norm_home.copy()
+                _df_h2h_fb_away = _df_h2h_norm_away.copy()
+                _falta_tel_uefa = (
+                    (_df_h2h_norm_home.empty or "tiros_f" not in _df_h2h_norm_home.columns or _df_h2h_norm_home["tiros_f"].dropna().empty)
+                    or (_df_h2h_norm_away.empty or "tiros_f" not in _df_h2h_norm_away.columns or _df_h2h_norm_away["tiros_f"].dropna().empty)
+                )
+                if _falta_tel_uefa:
+                    st.caption(
+                        "ℹ️ **Aislamiento estricto UEFA activo:** Los registros de esta competición no contienen desglose crudo `HS/HST/HC` en `historico_reciente`; "
+                        "se bloquea el arrastre silencioso desde ligas domésticas."
+                    )
             else:
-                _df_h2h_fb_away = _df_h2h_fb_away_all.tail(int(n_homogeneo_h2h)).copy()
+                _df_h2h_fb_home_all = _normalizar_partidos_equipo(
+                    df_eq1_all_full[df_eq1_all_full["HomeTeam"] == eq1],
+                    eq1,
+                )
+                _df_h2h_fb_away_all = _normalizar_partidos_equipo(
+                    df_eq2_all_full[df_eq2_all_full["AwayTeam"] == eq2],
+                    eq2,
+                )
+                if not _df_h2h_fb_home_all.empty and "corners_f" in _df_h2h_fb_home_all.columns:
+                    _df_h2h_fb_home = _df_h2h_fb_home_all[_df_h2h_fb_home_all["corners_f"].notna()].tail(int(n_homogeneo_h2h)).copy()
+                else:
+                    _df_h2h_fb_home = _df_h2h_fb_home_all.tail(int(n_homogeneo_h2h)).copy()
+
+                if not _df_h2h_fb_away_all.empty and "corners_f" in _df_h2h_fb_away_all.columns:
+                    _df_h2h_fb_away = _df_h2h_fb_away_all[_df_h2h_fb_away_all["corners_f"].notna()].tail(int(n_homogeneo_h2h)).copy()
+                else:
+                    _df_h2h_fb_away = _df_h2h_fb_away_all.tail(int(n_homogeneo_h2h)).copy()
 
             _stats_h2h_home = _calcular_resumen_bloque(
                 _df_h2h_norm_home,
@@ -7507,29 +7737,25 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
             st.dataframe(df_frec_tabla, width="stretch", hide_index=True)
 
             # ── 5B. MOTOR POISSON DE VOLUMEN (TIROS A PUERTA Y CÓRNERS TOTALES) ──
-            _mu_sot_loc_casa = (
-                float(_stats_h2h_home["sot_f"])
-                if _stats_h2h_home.get("n", 0) > 0 and float(_stats_h2h_home.get("sot_f", 0.0)) > 0.0
-                else float(sot_l or 4.5)
-            )
-            _mu_sot_vis_conc = (
-                float(_stats_h2h_away["sot_c"])
-                if _stats_h2h_away.get("n", 0) > 0 and float(_stats_h2h_away.get("sot_c", 0.0)) > 0.0
-                else float(sot_v or 3.8)
-            )
-            lambda_sot_h2h = max(0.5, _mu_sot_loc_casa + _mu_sot_vis_conc)
+            # Extracción bidireccional (Ataque y Defensa cruzados de ambos equipos)
+            _sot_loc_fav = float(_stats_h2h_home.get("sot_f", 4.5))
+            _sot_loc_conc = float(_stats_h2h_home.get("sot_c", 3.8))
+            _sot_vis_fav = float(_stats_h2h_away.get("sot_f", 4.0))
+            _sot_vis_conc = float(_stats_h2h_away.get("sot_c", 4.2))
 
-            _mu_cor_loc_casa = (
-                float(_stats_h2h_home["corners_f"])
-                if _stats_h2h_home.get("n", 0) > 0 and float(_stats_h2h_home.get("corners_f", 0.0)) > 0.0
-                else 5.2
-            )
-            _mu_cor_vis_conc = (
-                float(_stats_h2h_away["corners_c"])
-                if _stats_h2h_away.get("n", 0) > 0 and float(_stats_h2h_away.get("corners_c", 0.0)) > 0.0
-                else 4.4
-            )
-            lambda_corners_h2h = max(0.5, _mu_cor_loc_casa + _mu_cor_vis_conc)
+            # Lambda Total Bidireccional: Peligro Local vs Def Vis + Peligro Vis vs Def Local
+            _lambda_sot_eq1 = (_sot_loc_fav + _sot_vis_conc) / 2.0
+            _lambda_sot_eq2 = (_sot_vis_fav + _sot_loc_conc) / 2.0
+            lambda_sot_h2h = max(0.5, max(1.0, _lambda_sot_eq1 + _lambda_sot_eq2))
+
+            _cor_loc_fav = float(_stats_h2h_home.get("corners_f", 5.0))
+            _cor_loc_conc = float(_stats_h2h_home.get("corners_c", 4.0))
+            _cor_vis_fav = float(_stats_h2h_away.get("corners_f", 4.5))
+            _cor_vis_conc = float(_stats_h2h_away.get("corners_c", 4.8))
+
+            _lambda_cor_eq1 = (_cor_loc_fav + _cor_vis_conc) / 2.0
+            _lambda_cor_eq2 = (_cor_vis_fav + _cor_loc_conc) / 2.0
+            lambda_corners_h2h = max(0.5, max(1.0, _lambda_cor_eq1 + _lambda_cor_eq2))
 
             def _construir_matriz_poisson_volumen(lam_vol: float, lineas_eval: list[float]) -> pd.DataFrame:
                 filas_vol = []
@@ -7554,8 +7780,8 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
                     f"`λ = {lambda_sot_h2h:.2f}`"
                 )
                 st.caption(
-                    f"🏠 {eq1} SOT Favor (Casa): **{_mu_sot_loc_casa:.2f}** + "
-                    f"✈️ {eq2} SOT Concedido (Fuera): **{_mu_sot_vis_conc:.2f}**"
+                    f"🏠 {eq1} Esp.: **{_lambda_sot_eq1:.2f}** ({_sot_loc_fav:.1f} fav / {_sot_vis_conc:.1f} conc) + "
+                    f"✈️ {eq2} Esp.: **{_lambda_sot_eq2:.2f}** ({_sot_vis_fav:.1f} fav / {_sot_loc_conc:.1f} conc)"
                 )
                 df_poisson_sot = _construir_matriz_poisson_volumen(
                     lambda_sot_h2h, [6.5, 7.5, 8.5, 9.5, 10.5]
@@ -7568,8 +7794,8 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
                     f"`λ = {lambda_corners_h2h:.2f}`"
                 )
                 st.caption(
-                    f"🏠 {eq1} Córners Favor (Casa): **{_mu_cor_loc_casa:.2f}** + "
-                    f"✈️ {eq2} Córners Concedidos (Fuera): **{_mu_cor_vis_conc:.2f}**"
+                    f"🏠 {eq1} Esp.: **{_lambda_cor_eq1:.2f}** ({_cor_loc_fav:.1f} fav / {_cor_vis_conc:.1f} conc) + "
+                    f"✈️ {eq2} Esp.: **{_lambda_cor_eq2:.2f}** ({_cor_vis_fav:.1f} fav / {_cor_loc_conc:.1f} conc)"
                 )
                 df_poisson_corners = _construir_matriz_poisson_volumen(
                     lambda_corners_h2h, [7.5, 8.5, 9.5, 10.5, 11.5]
