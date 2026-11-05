@@ -3249,6 +3249,70 @@ def _col_disponible(df_in, candidatos):
     return None
 
 
+def _obtener_muestra_equipo_limpia(
+    df: pd.DataFrame,
+    equipo: str,
+    condicion: str = "all",
+    n: int | None = 10,
+    solo_temporada_actual: bool = True,
+    exigir_telemetria: bool = True,
+) -> pd.DataFrame:
+    """
+    Single Source of Truth para el filtrado muestral de Dossier de Equipo y Comparador H2H:
+    1. Filtra por equipo y condición ('home', 'away' o 'all').
+    2. Ordena cronológicamente por fecha real.
+    3. Aísla la temporada actual (salvo modo histórico explícito).
+    4. Descarta partidos no disputados (FTHG/FTAG nulos) y registros sin telemetría ('HS', 'HST', 'HC').
+    5. Aplica el corte .tail(n) sobre la muestra ya saneada.
+    """
+    if df is None or df.empty or not equipo:
+        return pd.DataFrame()
+
+    cond_norm = str(condicion or "all").strip().lower()
+    if cond_norm in ("home", "local", "casa", "h"):
+        df_eq = df[df["HomeTeam"] == equipo].copy()
+    elif cond_norm in ("away", "visitante", "fuera", "a"):
+        df_eq = df[df["AwayTeam"] == equipo].copy()
+    else:
+        df_eq = df[(df["HomeTeam"] == equipo) | (df["AwayTeam"] == equipo)].copy()
+
+    if df_eq.empty:
+        return pd.DataFrame()
+
+    df_eq = _ordenar_por_fecha(df_eq)
+
+    if solo_temporada_actual and "Temporada_Origen" in df_eq.columns:
+        serie_temp_ref = (
+            df["Temporada_Origen"].dropna().astype(str)
+            if "Temporada_Origen" in df.columns and not df["Temporada_Origen"].dropna().empty
+            else df_eq["Temporada_Origen"].dropna().astype(str)
+        )
+        if not serie_temp_ref.empty:
+            temp_actual = str(serie_temp_ref.max())
+            df_temp = df_eq[df_eq["Temporada_Origen"].astype(str) == temp_actual].copy()
+            if not df_temp.empty:
+                df_eq = df_temp
+
+    for _c_num in ("FTHG", "FTAG", "HTHG", "HTAG", "HS", "AS", "HST", "AST", "HC", "AC", "HF", "AF", "HxG", "AxG"):
+        if _c_num in df_eq.columns:
+            df_eq[_c_num] = pd.to_numeric(df_eq[_c_num], errors="coerce")
+
+    if "FTHG" in df_eq.columns and "FTAG" in df_eq.columns:
+        df_eq = df_eq.dropna(subset=["FTHG", "FTAG"]).copy()
+
+    if exigir_telemetria and not df_eq.empty:
+        cols_tel = [c for c in ("HS", "HST", "HC", "AS", "AST", "AC") if c in df_eq.columns]
+        if cols_tel:
+            df_tel = df_eq.dropna(subset=cols_tel).copy()
+            if not df_tel.empty:
+                df_eq = df_tel
+
+    if n is not None and int(n) > 0:
+        df_eq = df_eq.tail(int(n)).copy()
+
+    return df_eq
+
+
 def _normalizar_partidos_equipo(df_raw, equipo):
     """
     Transforma los registros del equipo en un DataFrame estandarizado desde la perspectiva
@@ -6173,17 +6237,34 @@ div[data-testid="stRadio"] label:has(input:checked) p {
             df_eq_ord_all = _ordenar_por_fecha(df_eq_raw_all) if not df_eq_raw_all.empty else pd.DataFrame()
 
             usar_decay_dossier = "Decaimiento" in horizonte_muestra
-            if "Últimos 10" in horizonte_muestra:
-                df_muestra_raw = df_eq_ord_all.tail(10).copy()
-            elif "Temporada Actual" in horizonte_muestra:
-                if "Temporada_Origen" in df_eq_ord_all.columns and not df_eq_ord_all["Temporada_Origen"].dropna().empty:
-                    temp_actual = str(df_eq_ord_all["Temporada_Origen"].dropna().astype(str).max())
-                    df_temp = df_eq_ord_all[df_eq_ord_all["Temporada_Origen"].astype(str) == temp_actual].copy()
-                    df_muestra_raw = df_temp if len(df_temp) >= 1 else df_eq_ord_all.tail(38).copy()
-                else:
-                    df_muestra_raw = df_eq_ord_all.tail(38).copy()
-            else:
-                df_muestra_raw = df_eq_ord_all.copy()
+            _es_uefa_dossier = comp_dossier_sel in _MAPA_SQL_UEFA_DOSSIER
+            _n_ventana_dossier = 10 if "Últimos 10" in horizonte_muestra else (38 if "Temporada Actual" in horizonte_muestra else None)
+            _solo_temp_dossier = not usar_decay_dossier
+
+            df_muestra_raw = _obtener_muestra_equipo_limpia(
+                df_comp_dossier,
+                equipo_elegido,
+                condicion="all",
+                n=_n_ventana_dossier,
+                solo_temporada_actual=_solo_temp_dossier,
+                exigir_telemetria=not _es_uefa_dossier,
+            )
+            df_muestra_home_raw = _obtener_muestra_equipo_limpia(
+                df_comp_dossier,
+                equipo_elegido,
+                condicion="home",
+                n=_n_ventana_dossier,
+                solo_temporada_actual=_solo_temp_dossier,
+                exigir_telemetria=not _es_uefa_dossier,
+            )
+            df_muestra_away_raw = _obtener_muestra_equipo_limpia(
+                df_comp_dossier,
+                equipo_elegido,
+                condicion="away",
+                n=_n_ventana_dossier,
+                solo_temporada_actual=_solo_temp_dossier,
+                exigir_telemetria=not _es_uefa_dossier,
+            )
 
             # Contexto de competición activa para Attack & Defense Ratings y membrete PDF
             if comp_dossier_sel in _MAPA_COMP_DOSSIER:
@@ -6211,7 +6292,7 @@ div[data-testid="stRadio"] label:has(input:checked) p {
             df_norm_global = _normalizar_partidos_equipo(df_muestra_raw, equipo_elegido) if not df_muestra_raw.empty else pd.DataFrame()
 
             # Enriquecimiento estricto UEFA desde estadisticas_jugadores (WHERE competicion = ?) sin mezclar liga doméstica
-            if comp_dossier_sel in _MAPA_SQL_UEFA_DOSSIER and not df_norm_global.empty and RUTA_BD.exists():
+            if _es_uefa_dossier and not df_norm_global.empty and RUTA_BD.exists():
                 _, _nom_uefa_q, _ = _MAPA_SQL_UEFA_DOSSIER[comp_dossier_sel]
                 try:
                     with sqlite3.connect(RUTA_BD) as _conn_u_tel:
@@ -6281,33 +6362,16 @@ div[data-testid="stRadio"] label:has(input:checked) p {
                                 df_norm_global.at[_idx_n, "rojas_riv"] = round(_d_rv["rojas"], 2)
                 except Exception:
                     pass
-
-            df_norm_home = df_norm_global[df_norm_global["es_local"]].copy() if not df_norm_global.empty else pd.DataFrame()
-            df_norm_away = df_norm_global[~df_norm_global["es_local"]].copy() if not df_norm_global.empty else pd.DataFrame()
-
-            # Muestra de respaldo aislada por competición (sin mezclar liga doméstica en UEFA)
-            if comp_dossier_sel in _MAPA_SQL_UEFA_DOSSIER:
-                df_fb_con_datos = df_norm_global.copy()
-                df_fb_home = df_norm_home.copy()
-                df_fb_away = df_norm_away.copy()
+                df_norm_home = df_norm_global[df_norm_global["es_local"]].copy() if not df_norm_global.empty else pd.DataFrame()
+                df_norm_away = df_norm_global[~df_norm_global["es_local"]].copy() if not df_norm_global.empty else pd.DataFrame()
             else:
-                df_eq_glob_all = _ordenar_por_fecha(
-                    df_comp_dossier[
-                        (df_comp_dossier["HomeTeam"] == equipo_elegido)
-                        | (df_comp_dossier["AwayTeam"] == equipo_elegido)
-                    ].copy()
-                )
-                df_fb_norm_all = _normalizar_partidos_equipo(df_eq_glob_all, equipo_elegido)
-                if not df_fb_norm_all.empty and "corners_f" in df_fb_norm_all.columns:
-                    df_fb_con_datos = df_fb_norm_all[df_fb_norm_all["corners_f"].notna()].copy()
-                else:
-                    df_fb_con_datos = df_fb_norm_all.copy()
-                if "Últimos 10" in horizonte_muestra and not df_fb_con_datos.empty:
-                    df_fb_con_datos = df_fb_con_datos.tail(10).copy()
-                elif "Temporada Actual" in horizonte_muestra and not df_fb_con_datos.empty:
-                    df_fb_con_datos = df_fb_con_datos.tail(38).copy()
-                df_fb_home = df_fb_con_datos[df_fb_con_datos["es_local"]].copy() if not df_fb_con_datos.empty else pd.DataFrame()
-                df_fb_away = df_fb_con_datos[~df_fb_con_datos["es_local"]].copy() if not df_fb_con_datos.empty else pd.DataFrame()
+                df_norm_home = _normalizar_partidos_equipo(df_muestra_home_raw, equipo_elegido) if not df_muestra_home_raw.empty else pd.DataFrame()
+                df_norm_away = _normalizar_partidos_equipo(df_muestra_away_raw, equipo_elegido) if not df_muestra_away_raw.empty else pd.DataFrame()
+
+            # Muestra de respaldo aislada por competición (Single Source of Truth)
+            df_fb_con_datos = df_norm_global.copy()
+            df_fb_home = df_norm_home.copy()
+            df_fb_away = df_norm_away.copy()
 
             def _preparar_df_dossier_fase2(df_norm_in: pd.DataFrame) -> pd.DataFrame:
                 if df_norm_in is None or df_norm_in.empty:
@@ -6996,6 +7060,65 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
             if _etq not in ligas_disp_h2h:
                 ligas_disp_h2h.append(_etq)
 
+        st.markdown("""
+<style>
+/* H2H · Selectores Dark Glassmorphism */
+.st-key-h2h_liga_sel div[data-baseweb="select"] > div,
+.st-key-h2h_eq_local div[data-baseweb="select"] > div,
+.st-key-h2h_eq_vis div[data-baseweb="select"] > div,
+.st-key-h2h_modo_muestra div[data-baseweb="select"] > div {
+    background-color: #0f172a !important;
+    border: 1px solid rgba(99, 102, 241, 0.3) !important;
+    border-radius: 8px !important;
+    color: #f8fafc !important;
+}
+.st-key-h2h_liga_sel div[data-baseweb="select"] *,
+.st-key-h2h_eq_local div[data-baseweb="select"] *,
+.st-key-h2h_eq_vis div[data-baseweb="select"] *,
+.st-key-h2h_modo_muestra div[data-baseweb="select"] * {
+    color: #f8fafc !important;
+}
+/* H2H · Ventana Homogénea (N) como píldoras segmentadas */
+.st-key-h2h_n_homogeneo div[role="radiogroup"] {
+    display: flex !important;
+    flex-direction: row !important;
+    gap: 6px !important;
+    background: rgba(15, 23, 42, 0.8) !important;
+    padding: 4px !important;
+    border-radius: 8px !important;
+    border: 1px solid rgba(99, 102, 241, 0.25) !important;
+}
+.st-key-h2h_n_homogeneo label {
+    background: transparent !important;
+    padding: 6px 16px !important;
+    border-radius: 6px !important;
+    margin: 0 !important;
+    cursor: pointer !important;
+    border: 1px solid transparent !important;
+}
+.st-key-h2h_n_homogeneo label > div:first-child { display: none !important; }
+.st-key-h2h_n_homogeneo label p { color: #94a3b8 !important; font-size: 0.8rem !important; margin: 0 !important; }
+.st-key-h2h_n_homogeneo label:has(input:checked) {
+    background: rgba(56, 189, 248, 0.18) !important;
+    border-color: rgba(56, 189, 248, 0.45) !important;
+}
+.st-key-h2h_n_homogeneo label:has(input:checked) p { color: #38bdf8 !important; font-weight: 700 !important; }
+/* H2H · Botón Invertir */
+.st-key-btn_swap_h2h button {
+    background: rgba(15, 23, 42, 0.75) !important;
+    border: 1px solid rgba(99, 102, 241, 0.3) !important;
+    color: #cbd5e1 !important;
+    border-radius: 8px !important;
+    font-weight: 500 !important;
+}
+.st-key-btn_swap_h2h button:hover {
+    background: rgba(56, 189, 248, 0.15) !important;
+    border-color: #38bdf8 !important;
+    color: #38bdf8 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
         sel_c1, sel_c2, sel_c3, sel_c4 = st.columns([1.5, 1.5, 1.5, 1.1])
         with sel_c1:
             liga_h2h_nom = st.selectbox("🏆 Competición / Liga:", ligas_disp_h2h, key="h2h_liga_sel")
@@ -7071,69 +7194,100 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
             )
 
         if eq1 and eq2 and eq1 != eq2:
-            df_base_muestra_h2h = (
-                df_liga_h2h
-                if modo_muestra_h2h == "Solo esta Competición (UEFA)"
-                else df_partidos_global
+            # Aislamiento SOLO si el usuario eligió explícitamente una competición individual (no "Todas/Global")
+            _es_seleccion_global_h2h = (
+                liga_h2h_nom == _OPCION_H2H_TODAS
+                or "Todas" in str(liga_h2h_nom)
+                or "Global" in str(liga_h2h_nom)
             )
-            df_base_ord_h2h = _ordenar_por_fecha(df_base_muestra_h2h)
-            df_glob_ord_h2h = _ordenar_por_fecha(df_partidos_global)
+            _es_uefa_estricto_h2h = (modo_muestra_h2h == "Solo esta Competición (UEFA)") and not _es_seleccion_global_h2h
+            df_base_muestra_h2h = df_liga_h2h if _es_uefa_estricto_h2h else df_partidos_global
 
-            # Aislar estrictamente la temporada actual en curso
-            if "Temporada_Origen" in df_glob_ord_h2h.columns and not df_glob_ord_h2h["Temporada_Origen"].dropna().empty:
-                _temp_actual_h2h = str(df_glob_ord_h2h["Temporada_Origen"].dropna().astype(str).max())
-                if "Temporada_Origen" in df_base_ord_h2h.columns:
-                    _df_base_temp = df_base_ord_h2h[df_base_ord_h2h["Temporada_Origen"].astype(str) == _temp_actual_h2h].copy()
-                    if not _df_base_temp.empty:
-                        df_base_ord_h2h = _df_base_temp
-                _df_glob_temp = df_glob_ord_h2h[df_glob_ord_h2h["Temporada_Origen"].astype(str) == _temp_actual_h2h].copy()
-                if not _df_glob_temp.empty:
-                    df_glob_ord_h2h = _df_glob_temp
+            # Ingesta multi-origen: cada equipo extrae su muestra del histórico completo (liga doméstica + UEFA),
+            # salvo competición individual explícita; si un equipo no disputa esa competición se recurre al global.
+            def _fuente_muestra_equipo_h2h(eq_nombre: str) -> pd.DataFrame:
+                if not _es_uefa_estricto_h2h:
+                    return df_partidos_global
+                _hay_eq = (
+                    (df_liga_h2h["HomeTeam"] == eq_nombre) | (df_liga_h2h["AwayTeam"] == eq_nombre)
+                ).any() if not df_liga_h2h.empty else False
+                return df_liga_h2h if _hay_eq else df_partidos_global
 
-            # Filtrar únicamente partidos ya disputados con telemetría válida
-            df_base_ord_h2h = df_base_ord_h2h.dropna(subset=['FTHG', 'FTAG'])
-            df_glob_ord_h2h = df_glob_ord_h2h.dropna(subset=['FTHG', 'FTAG'])
-            if 'HS' in df_base_ord_h2h.columns:
-                _df_tel_base = df_base_ord_h2h.dropna(subset=['HS', 'HST'])
-                df_telemetria_valida = _df_tel_base if not _df_tel_base.empty else df_base_ord_h2h
-            else:
-                df_telemetria_valida = df_base_ord_h2h
+            df_fuente_eq1 = _fuente_muestra_equipo_h2h(eq1)
+            df_fuente_eq2 = _fuente_muestra_equipo_h2h(eq2)
+            if _es_uefa_estricto_h2h and (df_fuente_eq1 is df_partidos_global or df_fuente_eq2 is df_partidos_global):
+                st.caption(
+                    "ℹ️ Alguno de los equipos no disputa la competición seleccionada: su muestra se toma del histórico global consolidado."
+                )
+            _n_ventana_h2h = int(n_homogeneo_h2h) if "Últimos N" in modo_muestra_h2h else None
+            _n_ventana_all_h2h = int(n_homogeneo_h2h) if "Últimos N" in modo_muestra_h2h else 10
 
-            if 'HS' in df_glob_ord_h2h.columns:
-                _df_tel_glob = df_glob_ord_h2h.dropna(subset=['HS', 'HST'])
-                df_glob_telemetria_valida = _df_tel_glob if not _df_tel_glob.empty else df_glob_ord_h2h
-            else:
-                df_glob_telemetria_valida = df_glob_ord_h2h
-
-            df_eq1_home_full = df_telemetria_valida[df_telemetria_valida["HomeTeam"] == eq1].copy()
-            df_eq2_away_full = df_telemetria_valida[df_telemetria_valida["AwayTeam"] == eq2].copy()
-            _df_fuente_all_h2h = (
-                df_telemetria_valida
-                if modo_muestra_h2h == "Solo esta Competición (UEFA)"
-                else df_glob_telemetria_valida
+            # Single Source of Truth (_obtener_muestra_equipo_limpia) compartido con Dossier de Equipo
+            df_eq1_home_full = _obtener_muestra_equipo_limpia(
+                df_fuente_eq1,
+                eq1,
+                condicion="home",
+                n=None,
+                solo_temporada_actual=True,
+                exigir_telemetria=not _es_uefa_estricto_h2h,
             )
-            df_eq1_all_full = _df_fuente_all_h2h[
-                (_df_fuente_all_h2h["HomeTeam"] == eq1) | (_df_fuente_all_h2h["AwayTeam"] == eq1)
-            ].copy()
-            df_eq2_all_full = _df_fuente_all_h2h[
-                (_df_fuente_all_h2h["HomeTeam"] == eq2) | (_df_fuente_all_h2h["AwayTeam"] == eq2)
-            ].copy()
+            df_eq2_away_full = _obtener_muestra_equipo_limpia(
+                df_fuente_eq2,
+                eq2,
+                condicion="away",
+                n=None,
+                solo_temporada_actual=True,
+                exigir_telemetria=not _es_uefa_estricto_h2h,
+            )
+            df_eq1_all_full = _obtener_muestra_equipo_limpia(
+                df_fuente_eq1,
+                eq1,
+                condicion="all",
+                n=None,
+                solo_temporada_actual=True,
+                exigir_telemetria=not _es_uefa_estricto_h2h,
+            )
+            df_eq2_all_full = _obtener_muestra_equipo_limpia(
+                df_fuente_eq2,
+                eq2,
+                condicion="all",
+                n=None,
+                solo_temporada_actual=True,
+                exigir_telemetria=not _es_uefa_estricto_h2h,
+            )
 
-            if "Últimos N" in modo_muestra_h2h:
-                df_eq1_home = df_eq1_home_full.tail(int(n_homogeneo_h2h)).copy()
-                df_eq2_away = df_eq2_away_full.tail(int(n_homogeneo_h2h)).copy()
-                df_eq1_all = df_eq1_all_full.tail(int(n_homogeneo_h2h)).copy()
-                df_eq2_all = df_eq2_all_full.tail(int(n_homogeneo_h2h)).copy()
-            else:
-                df_eq1_home = df_eq1_home_full.copy()
-                df_eq2_away = df_eq2_away_full.copy()
-                df_eq1_all = df_eq1_all_full.tail(10).copy()
-                df_eq2_all = df_eq2_all_full.tail(10).copy()
-
-            for _df_tmp in (df_eq1_home, df_eq2_away, df_eq1_all, df_eq2_all):
-                for _c_num in ("FTHG", "FTAG", "HTHG", "HTAG", "HS", "AS", "HST", "AST", "HC", "AC", "HF", "AF", "HxG", "AxG"):
-                    if _c_num in _df_tmp.columns:
-                        _df_tmp[_c_num] = pd.to_numeric(_df_tmp[_c_num], errors="coerce")
+            df_eq1_home = _obtener_muestra_equipo_limpia(
+                df_fuente_eq1,
+                eq1,
+                condicion="home",
+                n=_n_ventana_h2h,
+                solo_temporada_actual=True,
+                exigir_telemetria=not _es_uefa_estricto_h2h,
+            )
+            df_eq2_away = _obtener_muestra_equipo_limpia(
+                df_fuente_eq2,
+                eq2,
+                condicion="away",
+                n=_n_ventana_h2h,
+                solo_temporada_actual=True,
+                exigir_telemetria=not _es_uefa_estricto_h2h,
+            )
+            df_eq1_all = _obtener_muestra_equipo_limpia(
+                df_fuente_eq1,
+                eq1,
+                condicion="all",
+                n=_n_ventana_all_h2h,
+                solo_temporada_actual=True,
+                exigir_telemetria=not _es_uefa_estricto_h2h,
+            )
+            df_eq2_all = _obtener_muestra_equipo_limpia(
+                df_fuente_eq2,
+                eq2,
+                condicion="all",
+                n=_n_ventana_all_h2h,
+                solo_temporada_actual=True,
+                exigir_telemetria=not _es_uefa_estricto_h2h,
+            )
 
             # ── 2. RESILIENCIA MUESTRAL Y PONDERACIÓN CON FACTOR DE VENTAJA DE CAMPO ──
             n_home_strict = int(df_eq1_home["FTHG"].notna().sum()) if "FTHG" in df_eq1_home.columns else len(df_eq1_home)
@@ -7258,32 +7412,153 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
                 unsafe_allow_html=True,
             )
 
-            k_p1, k_p2, k_p3, k_p4, k_p5, k_p6 = st.columns(6)
-            k_p1.metric(f"🏠 Local ({eq1})", f"Cuota: {1.0 / p_1:.2f}", f"Prob: {p_1 * 100:.1f}%")
-            k_p2.metric("🤝 Empate (X)", f"Cuota: {1.0 / p_x:.2f}", f"Prob: {p_x * 100:.1f}%", delta_color="off")
-            k_p3.metric(f"✈️ Visitante ({eq2})", f"Cuota: {1.0 / p_2:.2f}", f"Prob: {p_2 * 100:.1f}%")
-            k_p4.metric("🔥 Over 2.5 Goles", f"Cuota: {1.0 / p_o25:.2f}", f"Prob: {p_o25 * 100:.1f}%", delta_color="off")
-            k_p5.metric("🧊 Under 2.5 Goles", f"Cuota: {1.0 / p_u25:.2f}", f"Prob: {p_u25 * 100:.1f}%", delta_color="off")
-            k_p6.metric("🎯 Ambos Marcan (Sí)", f"Cuota: {1.0 / p_btts_si:.2f}", f"Prob: {p_btts_si * 100:.1f}%", delta_color="off")
+            # ── HOOK 2: BENTO GRID DE SUPREMACÍA Y MERCADOS LÍQUIDOS ──
+            lambda_goles_eq1 = float(xg_l)
+            lambda_goles_eq2 = float(xg_v)
+            supremacia_xg = lambda_goles_eq1 - lambda_goles_eq2
+            total_xg_partido = lambda_goles_eq1 + lambda_goles_eq2
+            prob_btts = p_btts_si
+            prob_btts_no = max(0.001, 1.0 - prob_btts)
+            cuota_btts_no = 1.0 / prob_btts_no
+            _color_supr = "#38bdf8" if supremacia_xg > 0 else "#818cf8"
+            _eq_supr = eq1 if supremacia_xg >= 0 else eq2
 
-            with st.container(border=True):
-                st.markdown("#### 🎯 Top 3 Marcadores Más Probables (Distribución Exacta de Poisson)")
-                sc_c1, sc_c2, sc_c3 = st.columns(3)
-                medallas_sc = ["🥇 #1 Más Probable", "🥈 #2 Más Probable", "🥉 #3 Más Probable"]
-                colores_sc = ["#10B981", "#38BDF8", "#F59E0B"]
-                for idx_sc, (col_sc, (marc_txt, prob_sc)) in enumerate(zip((sc_c1, sc_c2, sc_c3), marcadores_ordenados)):
-                    cuota_sc = 1.0 / max(prob_sc, 1e-4)
-                    borde_c = colores_sc[idx_sc]
-                    with col_sc:
-                        st.markdown(
-                            f"<div style='background-color:#16192b;border:1.5px solid {borde_c};border-radius:10px;padding:14px;text-align:center;'>"
-                            f"<div style='color:#94A3B8;font-size:12.5px;font-weight:600;margin-bottom:4px;'>{medallas_sc[idx_sc]}</div>"
-                            f"<div style='font-size:26px;font-weight:800;color:#F8FAFC;letter-spacing:1px;'>{eq1} {marc_txt} {eq2}</div>"
-                            f"<div style='margin-top:6px;font-size:14px;color:{borde_c};font-weight:700;'>"
-                            f"Probabilidad: {prob_sc * 100:.1f}% &nbsp;·&nbsp; Cuota Justa: {cuota_sc:.2f}"
-                            f"</div></div>",
-                            unsafe_allow_html=True,
-                        )
+            def _celda_mercado_h2h(titulo: str, prob_m: float, color_m: str) -> str:
+                return (
+                    f'<div style="background: rgba(30, 41, 59, 0.45); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 10px; padding: 12px 14px;">'
+                    f'<div style="font-size: 0.70rem; font-weight: 700; color: {color_m}; text-transform: uppercase; letter-spacing: 0.5px;">{titulo}</div>'
+                    f'<div style="font-size: 1.35rem; font-weight: 800; color: #f8fafc; font-family: monospace; margin-top: 4px;">@ {1.0 / max(prob_m, 1e-4):.2f}</div>'
+                    f'<div style="font-size: 0.75rem; color: #94a3b8; margin-top: 4px;">Prob. Poisson: <strong style="color: {color_m};">{prob_m * 100:.1f}%</strong></div>'
+                    f'</div>'
+                )
+
+            html_bento_mercado = (
+                '<div style="background: rgba(15, 23, 42, 0.65); border: 1px solid rgba(99, 102, 241, 0.22); border-radius: 12px; padding: 16px; margin-bottom: 18px;">'
+                '<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 14px;">'
+                f'<div style="font-size: 1.0rem; font-weight: 700; color: {_color_supr};">Supremacía Neta: {abs(supremacia_xg):+.2f} xG a favor de {_eq_supr}</div>'
+                f'<div style="font-size: 0.9rem; color: #f8fafc; font-family: monospace;">{total_xg_partido:.2f} Goles Esperados Combinados</div>'
+                '<span style="font-size: 0.68rem; font-weight: 700; color: #34d399; background: rgba(52, 211, 153, 0.12); border: 1px solid rgba(52, 211, 153, 0.35); padding: 3px 8px; border-radius: 5px;">Muestra Limpia Sincronizada con Dossier</span>'
+                '</div>'
+                '<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;">'
+                + _celda_mercado_h2h("🔥 Over 2.5", p_o25, "#38bdf8")
+                + _celda_mercado_h2h("🧊 Under 2.5", p_u25, "#818cf8")
+                + _celda_mercado_h2h("🎯 BTTS (Sí)", prob_btts, "#34d399")
+                + _celda_mercado_h2h("🚫 BTTS (No)", prob_btts_no, "#f59e0b")
+                + '</div></div>'
+            )
+            st.markdown(html_bento_mercado, unsafe_allow_html=True)
+
+            # ── RADAR PRESCRIPTIVO DE OPORTUNIDADES (+EV) · 4 COLUMNAS ──
+            # Muestras locales/visitante idénticas a la Radiografía 4B (misma función unificada de muestra)
+            _n_rp = int(n_homogeneo_h2h)
+            _rp_norm_loc = _normalizar_partidos_equipo(df_eq1_all.tail(5) if relajo_local else df_eq1_home.tail(_n_rp), eq1)
+            _rp_norm_vis = _normalizar_partidos_equipo(df_eq2_all.tail(5) if relajo_vis else df_eq2_away.tail(_n_rp), eq2)
+            if _es_uefa_estricto_h2h:
+                _rp_fb_loc = _rp_norm_loc.copy()
+                _rp_fb_vis = _rp_norm_vis.copy()
+            else:
+                _rp_fb_loc_all = _normalizar_partidos_equipo(df_eq1_all_full[df_eq1_all_full["HomeTeam"] == eq1], eq1)
+                _rp_fb_vis_all = _normalizar_partidos_equipo(df_eq2_all_full[df_eq2_all_full["AwayTeam"] == eq2], eq2)
+                _rp_fb_loc = (
+                    _rp_fb_loc_all[_rp_fb_loc_all["corners_f"].notna()].tail(_n_rp).copy()
+                    if not _rp_fb_loc_all.empty and "corners_f" in _rp_fb_loc_all.columns else _rp_fb_loc_all.tail(_n_rp).copy()
+                )
+                _rp_fb_vis = (
+                    _rp_fb_vis_all[_rp_fb_vis_all["corners_f"].notna()].tail(_n_rp).copy()
+                    if not _rp_fb_vis_all.empty and "corners_f" in _rp_fb_vis_all.columns else _rp_fb_vis_all.tail(_n_rp).copy()
+                )
+            _rp_st_loc = _calcular_resumen_bloque(_rp_norm_loc, usar_decay=False, media_liga_gf=_comp_hg_mean, media_liga_gc=_comp_ag_mean, df_fallback=_rp_fb_loc)
+            _rp_st_vis = _calcular_resumen_bloque(_rp_norm_vis, usar_decay=False, media_liga_gf=_comp_ag_mean, media_liga_gc=_comp_hg_mean, df_fallback=_rp_fb_vis)
+
+            # Tarjeta 1 · Mercado de goles dinámico
+            if p_o25 >= p_u25:
+                _mercado_goles_label, _prob_goles = "Over 2.5 Goles", p_o25
+            else:
+                _mercado_goles_label, _prob_goles = "Under 2.5 Goles", p_u25
+            _cuota_goles = 1.0 / max(_prob_goles, 1e-4)
+
+            # Tarjeta 2 · SOT bidireccional (esperado de cada equipo = media ataque propio / defensa rival)
+            _sot_exp_loc = (float(_rp_st_loc.get("sot_f", 4.5)) + float(_rp_st_vis.get("sot_c", 4.2))) / 2.0
+            _sot_exp_vis = (float(_rp_st_vis.get("sot_f", 4.0)) + float(_rp_st_loc.get("sot_c", 3.8))) / 2.0
+            _lam_sot_val = max(1.0, _sot_exp_loc + _sot_exp_vis)
+            _linea_sot = 9.5 if _lam_sot_val >= 9.0 else 8.5
+            _linea_sot_label = f"Over {_linea_sot:.1f} SOT"
+            _prob_sot = float(np.clip(1.0 - prob_poisson_acumulada(_linea_sot, _lam_sot_val), 1e-4, 0.9999))
+
+            # Tarjeta 3 · Córners bidireccional
+            _corn_exp_loc = (float(_rp_st_loc.get("corners_f", 5.0)) + float(_rp_st_vis.get("corners_c", 4.8))) / 2.0
+            _corn_exp_vis = (float(_rp_st_vis.get("corners_f", 4.5)) + float(_rp_st_loc.get("corners_c", 4.0))) / 2.0
+            _lam_corn_val = max(1.0, _corn_exp_loc + _corn_exp_vis)
+            _linea_corn = 9.5 if _lam_corn_val >= 10.0 else 8.5
+            _linea_corn_label = f"Over {_linea_corn:.1f} Córners"
+            _prob_corn = float(np.clip(1.0 - prob_poisson_acumulada(_linea_corn, _lam_corn_val), 1e-4, 0.9999))
+
+            # Tarjeta 4 · Ritmo temporal: λ de goles en 1T cruzando ataque propio y defensa rival
+            def _media_col_rp(df_n: pd.DataFrame, col_n: str, default_n: float) -> float:
+                if df_n is None or df_n.empty or col_n not in df_n.columns:
+                    return default_n
+                s_n = pd.to_numeric(df_n[col_n], errors="coerce").dropna()
+                return float(s_n.mean()) if not s_n.empty else default_n
+
+            _gf1_loc = _media_col_rp(_rp_norm_loc, "gf_1t", xg_l * 0.44)
+            _gc1_loc = _media_col_rp(_rp_norm_loc, "gc_1t", xg_v * 0.44)
+            _gf1_vis = _media_col_rp(_rp_norm_vis, "gf_1t", xg_v * 0.44)
+            _gc1_vis = _media_col_rp(_rp_norm_vis, "gc_1t", xg_l * 0.44)
+            _lam_ht_loc = (_gf1_loc + _gc1_vis) / 2.0
+            _lam_ht_vis = (_gf1_vis + _gc1_loc) / 2.0
+            _lam_ht_tot = max(0.05, _lam_ht_loc + _lam_ht_vis)
+            _prob_ht = float(np.clip(1.0 - math.exp(-_lam_ht_tot), 0.05, 0.97))
+            _cuota_ht = round(1.0 / max(0.01, _prob_ht), 2)
+            _pct_1t_total = (_lam_ht_tot / max(total_xg_partido, 0.05)) * 100.0
+            _pct_1t_total = float(np.clip(_pct_1t_total, 0.0, 100.0))
+            _etq_ht = "Frecuencia Alta en 1T" if _prob_ht >= 0.70 else "Frecuencia Moderada en 1T"
+
+            def _tarjeta_radar_h2h(titulo: str, tag: str, color_r: str, linea_r: str, detalle_r: str, badge_r: str) -> str:
+                return (
+                    f'<div style="background: rgba(15, 23, 42, 0.7); border: 1px solid {color_r}59; border-radius: 8px; padding: 14px;">'
+                    f'<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">'
+                    f'<span style="font-size: 0.65rem; font-weight: 700; color: #94a3b8; text-transform: uppercase;">{titulo}</span>'
+                    f'<span style="font-size: 0.60rem; font-weight: 800; color: {color_r}; background: {color_r}1f; padding: 2px 6px; border-radius: 4px; border: 1px solid {color_r}40;">{tag}</span>'
+                    f'</div>'
+                    f'<div style="font-size: 1.15rem; font-weight: 800; color: #f8fafc; margin: 4px 0;">{linea_r}</div>'
+                    f'<div style="font-size: 0.72rem; color: #94a3b8;">{detalle_r}</div>'
+                    f'<div style="margin-top: 10px; display: inline-block; font-size: 0.65rem; font-weight: 700; color: {color_r}; background: {color_r}26; padding: 3px 8px; border-radius: 4px;">{badge_r}</div>'
+                    f'</div>'
+                )
+
+            _ab_loc = str(eq1)[:3].upper()
+            _ab_vis = str(eq2)[:3].upper()
+            _tipo_goles = "Over" if "Over" in _mercado_goles_label else "Under"
+            html_radar_h2h = (
+                '<div style="margin-bottom: 22px;">'
+                '<div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">'
+                '<span style="font-size: 1.05rem;">🎯</span>'
+                '<span style="font-size: 0.95rem; font-weight: 700; color: #f8fafc; letter-spacing: 0.3px;">Radar Prescriptivo de Oportunidades (+EV / Mercados Clave)</span>'
+                '</div>'
+                '<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;">'
+                + _tarjeta_radar_h2h(
+                    "Mercado Goles · Dinámico", "EV MODEL", "#10b981", _mercado_goles_label,
+                    f'Modelo: <strong style="color: #f8fafc;">@{_cuota_goles:.2f}</strong> · Prob: <strong style="color: #10b981;">{_prob_goles * 100:.1f}%</strong>',
+                    f"Masa Dominante ({_tipo_goles})",
+                )
+                + _tarjeta_radar_h2h(
+                    "Volumen · Tiros a Puerta (SOT)", "PROPS", "#38bdf8", _linea_sot_label,
+                    f'Total Proyectado: <strong style="color: #38bdf8;">{_lam_sot_val:.2f} SOT</strong> · Prob: <strong style="color: #f8fafc;">{_prob_sot * 100:.1f}%</strong> · @{1.0 / _prob_sot:.2f}',
+                    f"{_ab_loc} {_sot_exp_loc:.1f} | {_ab_vis} {_sot_exp_vis:.1f}",
+                )
+                + _tarjeta_radar_h2h(
+                    "Volumen · Córners Totales", "PROPS", "#818cf8", _linea_corn_label,
+                    f'Total Proyectado: <strong style="color: #818cf8;">{_lam_corn_val:.2f} Córn</strong> · Prob: <strong style="color: #f8fafc;">{_prob_corn * 100:.1f}%</strong> · @{1.0 / _prob_corn:.2f}',
+                    f"{_ab_loc} {_corn_exp_loc:.1f} | {_ab_vis} {_corn_exp_vis:.1f}",
+                )
+                + _tarjeta_radar_h2h(
+                    "Ritmo Temporal · 1er Tiempo", "TEMPO", "#f59e0b", "Gol en 1T (+0.5 HT)",
+                    f'Cuota Justa: <strong style="color: #f8fafc;">@{_cuota_ht:.2f}</strong> · Concurrencia: <strong style="color: #f59e0b;">{_prob_ht * 100:.1f}%</strong> · {_ab_loc} {_lam_ht_loc:.2f} | {_ab_vis} {_lam_ht_vis:.2f} (1T: {_pct_1t_total:.0f}% / 2T: {100.0 - _pct_1t_total:.0f}% del xG)',
+                    _etq_ht,
+                )
+                + '</div></div>'
+            )
+            st.markdown(html_radar_h2h, unsafe_allow_html=True)
 
             # ── 3. ARBITRAJE INTERACTIVO DE CUOTAS DE MERCADO VS VALOR ESPERADO (EV+ & KELLY) ──
             with st.expander("💰 Comparativa de Cuota de Mercado vs Valor Esperado (EV+ & Kelly)", expanded=True):
@@ -7292,9 +7567,12 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
                     "y el **Stake Recomendado (Quarter-Kelly 25%)** frente al modelo Poisson."
                 )
                 # Buscar si existen cuotas de casas de apuestas en BD para este emparejamiento exacto
+                if 'df_base_ord_h2h' not in locals():
+                    _df_fuente = df_liga_h2h if ('modo_muestra_h2h' in locals() and modo_muestra_h2h == "Solo esta Competición (UEFA)") else df_partidos_global
+                    df_base_ord_h2h = _ordenar_por_fecha(_df_fuente) if '_ordenar_por_fecha' in dir() else _df_fuente.sort_values(by='Date', ascending=False)
                 _df_match_odds = df_base_ord_h2h[
                     (df_base_ord_h2h["HomeTeam"] == eq1) & (df_base_ord_h2h["AwayTeam"] == eq2)
-                ]
+                ] if 'df_base_ord_h2h' in locals() and not df_base_ord_h2h.empty else pd.DataFrame()
                 def _extraer_cuota_bd_o_justa(df_m: pd.DataFrame, cols_odds: list[str], prob_justa: float) -> tuple[float, bool]:
                     cuota_j = float(np.clip(round(1.0 / max(prob_justa, 1e-4), 2), 1.01, 50.0))
                     if df_m is not None and not df_m.empty:
@@ -7362,14 +7640,21 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
                         key="h2h_mkt_o25",
                     )
 
+                cuota_mercado_1 = cuota_mkt_1
+                cuota_mercado_x = cuota_mkt_x
+                cuota_mercado_2 = cuota_mkt_2
+                cuota_mercado_over = cuota_mkt_o25
+
                 ev_cols = st.columns(4)
                 mercados_arbitraje = [
-                    (f"🏠 Victoria {eq1} (1)", p_1, cuota_mkt_1),
-                    ("🤝 Empate (X)", p_x, cuota_mkt_x),
-                    (f"✈️ Victoria {eq2} (2)", p_2, cuota_mkt_2),
-                    ("🔥 Over 2.5 Goles", p_o25, cuota_mkt_o25),
+                    (f"🏠 Victoria {eq1} (1)", p_1, cuota_mkt_1, "1"),
+                    ("🤝 Empate (X)", p_x, cuota_mkt_x, "x"),
+                    (f"✈️ Victoria {eq2} (2)", p_2, cuota_mkt_2, "2"),
+                    ("🔥 Over 2.5 Goles", p_o25, cuota_mkt_o25, "over"),
                 ]
-                for col_ev_ui, (nom_m_arb, prob_m_arb, cuota_m_arb) in zip(ev_cols, mercados_arbitraje):
+                ev_dict = {}
+                kelly_dict = {}
+                for col_ev_ui, (nom_m_arb, prob_m_arb, cuota_m_arb, clave_m) in zip(ev_cols, mercados_arbitraje):
                     cuota_justa_arb = 1.0 / max(prob_m_arb, 1e-4)
                     if abs(float(cuota_m_arb) - round(cuota_justa_arb, 2)) < 1e-4:
                         ev_val_pct = 0.0
@@ -7380,36 +7665,55 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
                         kelly_full = ((prob_m_arb * b_neto) - (1.0 - prob_m_arb)) / b_neto
                         quarter_kelly_pct = max(0.0, kelly_full * 0.25 * 100.0)
 
-                    if ev_val_pct > 2.0:
-                        bg_ev = "rgba(16, 185, 129, 0.16)"
-                        bd_ev = "#10B981"
-                        tx_ev = "#6EE7B7"
+                    ev_dict[clave_m] = ev_val_pct
+                    kelly_dict[clave_m] = quarter_kelly_pct
+
+                    bg_ev = "rgba(15, 23, 42, 0.65)"
+                    if ev_val_pct > 0.0:
+                        bd_ev = "rgba(16, 185, 129, 0.5)"
+                        tx_ev = "#10b981"
+                        badge_bg = "rgba(16, 185, 129, 0.15)"
+                        badge_border = "rgba(16, 185, 129, 0.35)"
+                        badge_txt = "#10b981"
                         etiqueta_ev = "🟢 VALOR CONFIRMADO (+EV)"
-                    elif ev_val_pct >= 0.0:
-                        bg_ev = "rgba(245, 158, 11, 0.14)"
-                        bd_ev = "#F59E0B"
-                        tx_ev = "#FCD34D"
-                        etiqueta_ev = "🟡 MARGEN NEUTRO"
+                    elif abs(ev_val_pct) < 1e-4:
+                        bd_ev = "rgba(99, 102, 241, 0.25)"
+                        tx_ev = "#94a3b8"
+                        badge_bg = "rgba(148, 163, 184, 0.12)"
+                        badge_border = "rgba(148, 163, 184, 0.25)"
+                        badge_txt = "#94a3b8"
+                        etiqueta_ev = "⚪ MARGEN NEUTRO"
                     else:
-                        bg_ev = "rgba(239, 68, 68, 0.14)"
-                        bd_ev = "#EF4444"
-                        tx_ev = "#FCA5A5"
+                        bd_ev = "rgba(99, 102, 241, 0.25)"
+                        tx_ev = "#f59e0b"
+                        badge_bg = "rgba(245, 158, 11, 0.12)"
+                        badge_border = "rgba(245, 158, 11, 0.25)"
+                        badge_txt = "#f59e0b"
                         etiqueta_ev = "🔴 SIN VALOR (EV NEGATIVO)"
 
                     with col_ev_ui:
                         st.markdown(
-                            f"<div style='background:{bg_ev};border:1.5px solid {bd_ev};border-radius:10px;padding:12px;'>"
+                            f"<div style='background:{bg_ev};border:1px solid {bd_ev};border-radius:10px;padding:14px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);box-shadow:0 4px 15px rgba(0,0,0,0.25);'>"
                             f"<div style='font-size:13px;font-weight:700;color:#F8FAFC;'>{nom_m_arb}</div>"
                             f"<div style='font-size:11.5px;color:#94A3B8;margin-top:2px;'>"
-                            f"Cuota Justa: <b>{cuota_justa_arb:.2f}</b> vs Mercado: <b>{cuota_m_arb:.2f}</b></div>"
-                            f"<div style='font-size:20px;font-weight:800;color:{tx_ev};margin-top:6px;'>"
+                            f"Cuota Justa: <b style='color:#f8fafc;'>{cuota_justa_arb:.2f}</b> vs Mercado: <b style='color:#f8fafc;'>{cuota_m_arb:.2f}</b></div>"
+                            f"<div style='font-size:20px;font-weight:800;color:{tx_ev};margin-top:6px;font-family:monospace;'>"
                             f"EV: {ev_val_pct:+.2f}%</div>"
-                            f"<div style='font-size:12.5px;color:#E2E8F0;margin-top:4px;'>"
-                            f"💼 Quarter-Kelly: <b>{quarter_kelly_pct:.2f}% bank</b></div>"
-                            f"<div style='font-size:11px;font-weight:700;color:{tx_ev};margin-top:4px;'>{etiqueta_ev}</div>"
+                            f"<div style='font-size:12.5px;color:#cbd5e1;margin-top:4px;'>"
+                            f"💼 Stake (Kelly 25%): <b style='color:#f8fafc;'>{quarter_kelly_pct:.2f}% bank</b></div>"
+                            f"<div style='display:inline-block;font-size:11px;font-weight:700;color:{badge_txt};background:{badge_bg};border:1px solid {badge_border};border-radius:5px;padding:2px 8px;margin-top:8px;'>{etiqueta_ev}</div>"
                             f"</div>",
                             unsafe_allow_html=True,
                         )
+
+                ev_1 = ev_dict.get("1", 0.0)
+                ev_x = ev_dict.get("x", 0.0)
+                ev_2 = ev_dict.get("2", 0.0)
+                ev_over = ev_dict.get("over", 0.0)
+                kelly_1 = kelly_dict.get("1", 0.0)
+                kelly_x = kelly_dict.get("x", 0.0)
+                kelly_2 = kelly_dict.get("2", 0.0)
+                kelly_over = kelly_dict.get("over", 0.0)
 
             # ── 4. COMPARATIVA TÁCTICA Y ESTIMACIÓN DE LÍNEA DE HÁNDICAP ASIÁTICO JUSTO ──
             st.markdown("---")
@@ -7474,34 +7778,30 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
             )
 
             categorias_tacticas = [
-                "Eficiencia Ofensiva (Goles p/p)",
-                "Fragilidad Defensiva (xGA/GC p/p)",
-                "Tiros a Puerta a Favor p/p",
-                "Córners Totales (Media p/p)",
-                "Intensidad / Faltas Cometidas p/p",
+                "Eficiencia Ofensiva (Goles)",
+                "Solidez Defensiva (xGA/GC rec)",
+                "Tiros a Puerta (SOT/p)",
+                "Córners Totales (p/90)",
+                "Fricción (Faltas/p)",
             ]
-            raw_loc = [gf_l, xga_l, sot_l, cor_l, faltas_l]
-            raw_vis = [gf_v, xga_v, sot_v, cor_v, faltas_v]
-            topes_escala = [3.0, 2.5, 8.5, 14.0, 18.0]
+            raw_loc = [float(gf_l or 0.0), float(xga_l or 0.0), float(sot_l or 0.0), float(cor_l or 0.0), float(faltas_l or 0.0)]
+            raw_vis = [float(gf_v or 0.0), float(xga_v or 0.0), float(sot_v or 0.0), float(cor_v or 0.0), float(faltas_v or 0.0)]
 
-            norm_loc = [
-                0.0 if (v is None or v <= 0.0) else float(np.clip((v / m) * 100.0, 8.0, 100.0))
-                for v, m in zip(raw_loc, topes_escala)
-            ]
-            norm_vis = [
-                0.0 if (v is None or v <= 0.0) else float(np.clip((v / m) * 100.0, 8.0, 100.0))
-                for v, m in zip(raw_vis, topes_escala)
-            ]
-            txt_loc = ["N/D" if (v is None or v <= 0.0) else f"{v:.2f}" for v in raw_loc]
-            txt_vis = ["N/D" if (v is None or v <= 0.0) else f"{v:.2f}" for v in raw_vis]
+            # Semántica defensiva: advertir vulnerabilidad en ámbar (#f59e0b) al equipo que más goles o xGA concede
+            color_def_loc = "#f59e0b" if raw_loc[1] > raw_vis[1] else "#38bdf8"
+            color_def_vis = "#f59e0b" if raw_vis[1] > raw_loc[1] else "#818cf8"
+
+            colors_loc = ["#38bdf8", color_def_loc, "#38bdf8", "#38bdf8", "#38bdf8"]
+            colors_vis = ["#818cf8", color_def_vis, "#818cf8", "#818cf8", "#818cf8"]
 
             # Cálculo de Supremacía y Línea de Hándicap Asiático Justo
             supremacia_xg = xg_l - xg_v
             linea_ah_justa = -round(supremacia_xg * 4.0) / 4.0
+            linea_ha_proyectada = linea_ah_justa
             if abs(linea_ah_justa) < 0.05:
                 linea_ah_justa = 0.0
-                linea_ah_str = f"PK / HA 0.0 (DNB)"
-                linea_ah_vis_str = f"PK / HA 0.0 (DNB)"
+                linea_ah_str = "PK / HA 0.0 (DNB)"
+                linea_ah_vis_str = "PK / HA 0.0 (DNB)"
             else:
                 linea_ah_str = f"HA {linea_ah_justa:+.2f}"
                 linea_ah_vis_str = f"HA {-linea_ah_justa:+.2f}"
@@ -7513,6 +7813,46 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
             cuota_ha_p05_vis = 1.0 / max(p_x + p_2, 1e-4)
             cuota_ha_p05_loc = 1.0 / max(p_1 + p_x, 1e-4)
             cuota_ha_m05_vis = 1.0 / p_2
+            cuota_ha_dnb_loc = cuota_dnb_loc
+            cuota_ha_dnb_vis = cuota_dnb_vis
+
+            # Bivariante Poisson para línea equilibrada / cualquier línea asiática
+            def _prob_ha_bivariante(lin_loc: float) -> tuple[float, float]:
+                dif_probs = {}
+                for (i_score, j_score), pr_score in matriz_7x7.items():
+                    d_score = i_score - j_score
+                    dif_probs[d_score] = dif_probs.get(d_score, 0.0) + (pr_score / norm)
+
+                def _prob_entera_o_media(lin: float) -> tuple[float, float]:
+                    if abs(lin - round(lin)) < 1e-4:
+                        li = int(round(lin))
+                        pw = sum(p for d_val, p in dif_probs.items() if d_val + li > 0)
+                        pl = sum(p for d_val, p in dif_probs.items() if d_val + li < 0)
+                        denom = max(pw + pl, 1e-4)
+                        p_eff = pw / denom
+                        return p_eff, 1.0 - p_eff
+                    else:
+                        pw = sum(p for d_val, p in dif_probs.items() if (d_val + lin) > 0)
+                        p_eff = max(1e-4, min(0.999, pw))
+                        return p_eff, 1.0 - p_eff
+
+                rem = abs(lin_loc) % 0.5
+                if abs(rem - 0.25) < 1e-4:
+                    la = lin_loc - 0.25
+                    lb = lin_loc + 0.25
+                    pa_l, _ = _prob_entera_o_media(la)
+                    pb_l, _ = _prob_entera_o_media(lb)
+                    p_loc = (pa_l + pb_l) / 2.0
+                else:
+                    p_loc, _ = _prob_entera_o_media(lin_loc)
+                p_loc = float(np.clip(p_loc, 0.01, 0.99))
+                return p_loc, 1.0 - p_loc
+
+            p_ha_opt_loc, p_ha_opt_vis = _prob_ha_bivariante(linea_ah_justa)
+            cuota_ha_opt_loc = round(1.0 / max(0.01, p_ha_opt_loc), 2)
+            cuota_ha_opt_vis = round(1.0 / max(0.01, p_ha_opt_vis), 2)
+            cuota_ha_equilibrada_eq1 = cuota_ha_opt_loc
+            cuota_ha_equilibrada_eq2 = cuota_ha_opt_vis
 
             graf_c1, graf_c2 = st.columns([1.2, 1.0])
             with graf_c1:
@@ -7520,37 +7860,48 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
                 fig_bars.add_trace(
                     go.Bar(
                         y=categorias_tacticas,
-                        x=norm_loc,
+                        x=raw_loc,
                         name=f"🏠 {eq1} (Casa)",
                         orientation="h",
-                        marker=dict(color="#10B981"),
-                        text=txt_loc,
+                        marker=dict(color=colors_loc, cornerradius=4),
+                        texttemplate="%{value:.2f}",
                         textposition="outside",
-                        hovertemplate="<b>%{y}</b><br>Media real: %{text}<extra></extra>",
+                        outsidetextfont=dict(color="#f8fafc", family="monospace", size=11),
+                        hovertemplate="<b>%{y}</b><br>" + f"{eq1}: " + "%{x:.2f}<extra></extra>",
                     )
                 )
                 fig_bars.add_trace(
                     go.Bar(
                         y=categorias_tacticas,
-                        x=norm_vis,
+                        x=raw_vis,
                         name=f"✈️ {eq2} (Fuera)",
                         orientation="h",
-                        marker=dict(color="#38BDF8"),
-                        text=txt_vis,
+                        marker=dict(color=colors_vis, cornerradius=4),
+                        texttemplate="%{value:.2f}",
                         textposition="outside",
-                        hovertemplate="<b>%{y}</b><br>Media real: %{text}<extra></extra>",
+                        outsidetextfont=dict(color="#f8fafc", family="monospace", size=11),
+                        hovertemplate="<b>%{y}</b><br>" + f"{eq2}: " + "%{x:.2f}<extra></extra>",
                     )
                 )
                 fig_bars.update_layout(
                     barmode="group",
-                    paper_bgcolor="#0e1117",
-                    plot_bgcolor="#16192b",
-                    font=dict(color="#f0f2f6"),
-                    xaxis=dict(title="Índice Comparativo (0-100) · Etiqueta = Media Exacta p/p", range=[0, 110], gridcolor="#2d3748"),
-                    yaxis=dict(autorange="reversed", gridcolor="#2d3748"),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
-                    margin=dict(l=10, r=20, t=40, b=30),
-                    height=370,
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(family="monospace", color="#f8fafc", size=11),
+                    xaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
+                    yaxis=dict(autorange="reversed", showgrid=False, tickfont=dict(color="#cbd5e1", size=11)),
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=1.04,
+                        xanchor="center",
+                        x=0.5,
+                        bgcolor="rgba(15, 23, 42, 0.8)",
+                        bordercolor="rgba(99, 102, 241, 0.25)",
+                        borderwidth=1,
+                    ),
+                    margin=dict(l=10, r=40, t=30, b=10),
+                    height=330,
                 )
                 st.plotly_chart(fig_bars, width="stretch")
 
@@ -7563,33 +7914,95 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
                         else (f"Favoritismo Visitante ({eq2})" if supremacia_xg < -0.12 else "Duelo Equilibrado (Pick'em)")
                     )
                     st.markdown(
-                        f"<div style='background-color:#16192b;border:1.5px solid #38BDF8;border-radius:10px;padding:14px;margin-bottom:10px;'>"
-                        f"<div style='color:#94A3B8;font-size:12.5px;font-weight:600;'>Supremacía de Goles Esperados (xG Local − xG Visitante)</div>"
-                        f"<div style='font-size:24px;font-weight:800;color:#F8FAFC;margin-top:4px;'>"
-                        f"{supremacia_xg:+.2f} xG &nbsp;·&nbsp; <span style='color:#38BDF8;'>{sesgo_dom}</span></div>"
-                        f"<div style='margin-top:8px;font-size:15px;color:#10B981;font-weight:700;'>"
+                        f"<div style='background-color:rgba(15, 23, 42, 0.65);border:1px solid rgba(99, 102, 241, 0.3);border-radius:10px;padding:14px;margin-bottom:12px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);'>"
+                        f"<div style='color:#94A3B8;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;'>Supremacía de Goles Esperados (xG Local − xG Visitante)</div>"
+                        f"<div style='font-size:22px;font-weight:800;color:#F8FAFC;margin-top:4px;font-family:monospace;'>"
+                        f"{supremacia_xg:+.2f} xG &nbsp;·&nbsp; <span style='color:#38BDF8;font-size:16px;'>{sesgo_dom}</span></div>"
+                        f"<div style='margin-top:6px;font-size:13.5px;color:#34D399;font-weight:700;'>"
                         f"🎯 Línea Equilibrada Proyectada: {eq1} {linea_ah_str} / {eq2} {linea_ah_vis_str}</div>"
                         f"</div>",
                         unsafe_allow_html=True,
                     )
-                    df_ah_justo = pd.DataFrame([
-                        {
-                            "Línea Asiática": "HA 0.0 (Draw No Bet)",
-                            f"🏠 {eq1}": f"Cuota: {cuota_dnb_loc:.2f}",
-                            f"✈️ {eq2}": f"Cuota: {cuota_dnb_vis:.2f}",
-                        },
-                        {
-                            "Línea Asiática": f"HA -0.5 ({eq1}) / +0.5 ({eq2})",
-                            f"🏠 {eq1}": f"Cuota: {cuota_ha_m05_loc:.2f}",
-                            f"✈️ {eq2}": f"Cuota: {cuota_ha_p05_vis:.2f}",
-                        },
-                        {
-                            "Línea Asiática": f"HA +0.5 ({eq1}) / -0.5 ({eq2})",
-                            f"🏠 {eq1}": f"Cuota: {cuota_ha_p05_loc:.2f}",
-                            f"✈️ {eq2}": f"Cuota: {cuota_ha_m05_vis:.2f}",
-                        },
-                    ])
-                    st.dataframe(df_ah_justo, width="stretch", hide_index=True)
+
+                    # Filas fijas y fila destacada dinámica
+                    es_fija_0 = abs(linea_ah_justa) < 0.05
+                    es_fija_m05 = abs(linea_ah_justa - (-0.5)) < 0.05
+                    es_fija_p05 = abs(linea_ah_justa - 0.5) < 0.05
+                    es_modelo_especial = not (es_fija_0 or es_fija_m05 or es_fija_p05)
+
+                    fila_m05 = {
+                        "etiqueta": f"HA -0.5 ({eq1}) / +0.5 ({eq2})",
+                        "c_loc": f"{cuota_ha_m05_loc:.2f}",
+                        "c_vis": f"{cuota_ha_p05_vis:.2f}",
+                        "es_modelo": es_fija_m05,
+                    }
+                    fila_0 = {
+                        "etiqueta": "HA 0.0 (Draw No Bet)",
+                        "c_loc": f"{cuota_dnb_loc:.2f}",
+                        "c_vis": f"{cuota_dnb_vis:.2f}",
+                        "es_modelo": es_fija_0,
+                    }
+                    fila_p05 = {
+                        "etiqueta": f"HA +0.5 ({eq1}) / -0.5 ({eq2})",
+                        "c_loc": f"{cuota_ha_p05_loc:.2f}",
+                        "c_vis": f"{cuota_ha_m05_vis:.2f}",
+                        "es_modelo": es_fija_p05,
+                    }
+
+                    if es_modelo_especial:
+                        fila_modelo = {
+                            "etiqueta": f"{linea_ah_str} ({eq1}) / {linea_ah_vis_str} ({eq2})",
+                            "c_loc": f"{cuota_ha_opt_loc:.2f}",
+                            "c_vis": f"{cuota_ha_opt_vis:.2f}",
+                            "es_modelo": True,
+                        }
+                        if linea_ah_justa < -0.5:
+                            filas_ah = [fila_modelo, fila_m05, fila_0, fila_p05]
+                        elif linea_ah_justa < 0.0:
+                            filas_ah = [fila_m05, fila_modelo, fila_0, fila_p05]
+                        elif linea_ah_justa < 0.5:
+                            filas_ah = [fila_m05, fila_0, fila_modelo, fila_p05]
+                        else:
+                            filas_ah = [fila_m05, fila_0, fila_p05, fila_modelo]
+                    else:
+                        filas_ah = [fila_m05, fila_0, fila_p05]
+
+                    filas_html_ah = ""
+                    for f_ah in filas_ah:
+                        if f_ah["es_modelo"]:
+                            st_row = "background: rgba(56, 189, 248, 0.12); border-left: 3px solid #38bdf8; border-bottom: 1px solid rgba(99, 102, 241, 0.25);"
+                            badge_modelo = ' <span style="font-size: 0.62rem; font-weight: 800; color: #38bdf8; background: rgba(56, 189, 248, 0.2); border: 1px solid rgba(56, 189, 248, 0.4); padding: 1px 5px; border-radius: 4px; margin-left: 6px;">🎯 LÍNEA MODELO</span>'
+                            txt_c_loc = f'<strong style="color: #34d399; font-size: 0.88rem;">@{f_ah["c_loc"]}</strong>'
+                            txt_c_vis = f'<strong style="color: #38bdf8; font-size: 0.88rem;">@{f_ah["c_vis"]}</strong>'
+                            txt_etq = f'<span style="font-weight: 700; color: #f8fafc;">{f_ah["etiqueta"]}</span>{badge_modelo}'
+                        else:
+                            st_row = "border-bottom: 1px solid rgba(255, 255, 255, 0.05);"
+                            txt_c_loc = f'<span style="color: #f8fafc;">@{f_ah["c_loc"]}</span>'
+                            txt_c_vis = f'<span style="color: #f8fafc;">@{f_ah["c_vis"]}</span>'
+                            txt_etq = f'<span style="color: #cbd5e1;">{f_ah["etiqueta"]}</span>'
+
+                        filas_html_ah += (
+                            f'<tr style="{st_row}">\n'
+                            f'<td style="padding: 9px 12px; text-align: left;">{txt_etq}</td>\n'
+                            f'<td style="padding: 9px 12px; text-align: right; font-family: monospace;">{txt_c_loc}</td>\n'
+                            f'<td style="padding: 9px 12px; text-align: right; font-family: monospace;">{txt_c_vis}</td>\n'
+                            f'</tr>\n'
+                        )
+
+                    tabla_ah_html = (
+                        '<div style="overflow-x: auto; border-radius: 8px; border: 1px solid rgba(99, 102, 241, 0.22);">'
+                        '<table style="width: 100%; border-collapse: collapse; font-family: monospace; font-size: 0.82rem; background: rgba(15, 23, 42, 0.65);">'
+                        '<thead>'
+                        '<tr style="background: rgba(30, 41, 59, 0.85); color: #94a3b8; font-size: 0.70rem; text-transform: uppercase;">'
+                        '<th style="padding: 9px 12px; text-align: left;">Línea Asiática</th>'
+                        f'<th style="padding: 9px 12px; text-align: right;">🏠 {eq1}</th>'
+                        f'<th style="padding: 9px 12px; text-align: right;">✈️ {eq2}</th>'
+                        '</tr>'
+                        '</thead>'
+                        f'<tbody>\n{filas_html_ah}</tbody>'
+                        '</table></div>'
+                    )
+                    st.markdown(tabla_ah_html, unsafe_allow_html=True)
 
             # ── 4B. ANÁLISIS COMPARATIVO: CONDICIÓN LOCAL VS CONDICIÓN VISITANTE ──
             st.markdown("---")
