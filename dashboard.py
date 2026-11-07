@@ -122,6 +122,46 @@ st.markdown("""
 
 RUTA_BD = Path(__file__).parent / "macro_base_futbol.db"
 
+
+def _inicializar_tabla_registro_apuestas() -> None:
+    """Inicializa de forma idempotente la tabla registro_cuotas_apuestas en macro_base_futbol.db."""
+    try:
+        with sqlite3.connect(RUTA_BD) as _conn_bets_init:
+            _cur_bets_init = _conn_bets_init.cursor()
+            _cur_bets_init.execute(
+                """
+                CREATE TABLE IF NOT EXISTS registro_cuotas_apuestas (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    fecha_registro TEXT NOT NULL,
+                    competicion TEXT,
+                    equipo_local TEXT NOT NULL,
+                    equipo_visitante TEXT NOT NULL,
+                    mercado_categoria TEXT NOT NULL,
+                    mercado_detalle TEXT NOT NULL,
+                    linea REAL,
+                    cuota_bookie REAL NOT NULL,
+                    cuota_justa_modelo REAL,
+                    stake REAL DEFAULT 1.0,
+                    estado TEXT DEFAULT 'PENDIENTE',
+                    unidades_balance REAL DEFAULT 0.0,
+                    tipo_ticket TEXT DEFAULT 'SIMPLE',
+                    notas TEXT
+                );
+                """
+            )
+            try:
+                _cur_bets_init.execute(
+                    "ALTER TABLE registro_cuotas_apuestas ADD COLUMN tipo_ticket TEXT DEFAULT 'SIMPLE'"
+                )
+            except sqlite3.OperationalError:
+                pass
+            _conn_bets_init.commit()
+    except Exception:
+        pass
+
+
+_inicializar_tabla_registro_apuestas()
+
 MAPA_LIGAS = {
     "SP1": "LaLiga (España)",
     "SP2": "LaLiga 2 (España)",
@@ -2139,6 +2179,7 @@ OPCIONES_MENU_GLOBAL = [
     "⚖️ Directorio y Matchup Árbitros",
     "🧮 Hándicap Asiático Avanzado",
     "🎯 Escáner Autónomo de Ineficiencias (+EV Scanner)",
+    "📒 Historial de Apuestas",
 ]
 
 MAPA_BREADCRUMB_MODULOS = {
@@ -2153,6 +2194,8 @@ MAPA_BREADCRUMB_MODULOS = {
     "⚖️ Directorio y Matchup Árbitros": "Matchup de Árbitros & Tarjetas",
     "🧮 Hándicap Asiático Avanzado": "Hándicap Asiático Avanzado",
     "🎯 Escáner Autónomo de Ineficiencias (+EV Scanner)": "Escáner Autónomo (+EV Scanner)",
+    "📒 Historial de Apuestas": "Historial y Registro de Apuestas (+EV Bet Tracker)",
+    "📒 Historial y Registro de Apuestas": "Historial y Registro de Apuestas (+EV Bet Tracker)",
 }
 
 
@@ -2160,6 +2203,8 @@ def _normalizar_modulo_nav(destino: str) -> str:
     """Homogeneiza alias de navegación hacia las claves canónicas del menú lateral."""
     if not destino or destino == "Inicio / Portada":
         return MODULO_INICIO
+    if destino == "📒 Historial y Registro de Apuestas":
+        return "📒 Historial de Apuestas"
     return destino if destino in OPCIONES_MENU_GLOBAL else MODULO_INICIO
 
 
@@ -3313,6 +3358,63 @@ def _obtener_muestra_equipo_limpia(
     return df_eq
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _obtener_mapa_telemetria_jugadores_bd() -> dict:
+    """
+    Extrae promedios reales por partido de tiros, SOT, faltas y tarjetas desde
+    estadisticas_jugadores en macro_base_futbol.db para enriquecer equipos (especialmente
+    clubes europeos / fuera del Top 5 ligas) cuyos registros en historico_reciente
+    tienen HS/HST/HC/HF/HY nulos.
+    """
+    if not RUTA_BD.exists():
+        return {}
+    try:
+        with sqlite3.connect(RUTA_BD) as conn_tel:
+            df_tel = pd.read_sql_query(
+                """
+                SELECT Equipo,
+                       SUM(COALESCE(tiros_totales, 0)) AS tiros,
+                       SUM(COALESCE(tiros_a_puerta, 0)) AS sot,
+                       SUM(COALESCE(faltas_cometidas, 0)) AS faltas_c,
+                       SUM(COALESCE(Faltas_Recibidas, 0)) AS faltas_r,
+                       SUM(COALESCE(tarjetas_amarillas, 0)) AS amar,
+                       SUM(COALESCE(tarjetas_rojas, 0)) AS rojas,
+                       MAX(COALESCE(partidos_jugados, 0)) AS pj
+                FROM estadisticas_jugadores
+                WHERE Equipo IS NOT NULL
+                GROUP BY Equipo
+                """,
+                conn_tel,
+            )
+        if df_tel.empty:
+            return {}
+        mapa = {}
+        for _, r in df_tel.iterrows():
+            eq_k = str(r["Equipo"]).strip()
+            pj_v = float(r.get("pj") or 0.0)
+            if pj_v <= 0:
+                continue
+            t_m = round(float(r.get("tiros") or 0.0) / pj_v, 2)
+            s_m = round(float(r.get("sot") or 0.0) / pj_v, 2)
+            fc_m = round(float(r.get("faltas_c") or 0.0) / pj_v, 2)
+            fr_m = round(float(r.get("faltas_r") or 0.0) / pj_v, 2)
+            am_m = round(float(r.get("amar") or 0.0) / pj_v, 2)
+            rj_m = round(float(r.get("rojas") or 0.0) / pj_v, 2)
+            co_m = round(max(2.5, t_m * 0.35), 2) if t_m > 0 else 0.0
+            mapa[eq_k] = {
+                "tiros": t_m,
+                "sot": s_m,
+                "faltas_c": fc_m,
+                "faltas_r": fr_m,
+                "amar": am_m,
+                "rojas": rj_m,
+                "corners": co_m,
+            }
+        return mapa
+    except Exception:
+        return {}
+
+
 def _normalizar_partidos_equipo(df_raw, equipo):
     """
     Transforma los registros del equipo en un DataFrame estandarizado desde la perspectiva
@@ -3331,26 +3433,35 @@ def _normalizar_partidos_equipo(df_raw, equipo):
     c_htag = _col_disponible(df_raw, ["HTAG"])
     c_hxg = _col_disponible(df_raw, ["HxG", "xg_local"])
     c_axg = _col_disponible(df_raw, ["AxG", "xg_visitante"])
-    c_hs = _col_disponible(df_raw, ["HS", "tiros_local"])
-    c_as = _col_disponible(df_raw, ["AS", "tiros_visitante"])
-    c_hst = _col_disponible(df_raw, ["HST", "sot_local"])
-    c_ast = _col_disponible(df_raw, ["AST", "sot_visitante"])
-    c_hc = _col_disponible(df_raw, ["HC", "corners_local", "corners_favor"])
-    c_ac = _col_disponible(df_raw, ["AC", "corners_visitante", "corners_contra"])
+    c_hs = _col_disponible(df_raw, ["HS", "tiros_local", "tiros_favor", "shots_favor", "remates_favor", "tiros"])
+    c_as = _col_disponible(df_raw, ["AS", "tiros_visitante", "tiros_contra", "shots_contra", "remates_contra"])
+    c_hst = _col_disponible(df_raw, ["HST", "sot_local", "sot_favor", "tiros_puerta_favor", "shots_on_target_favor"])
+    c_ast = _col_disponible(df_raw, ["AST", "sot_visitante", "sot_contra", "tiros_puerta_contra", "shots_on_target_contra"])
+    c_hc = _col_disponible(df_raw, ["HC", "corners_local", "corners_favor", "saques_esquina"])
+    c_ac = _col_disponible(df_raw, ["AC", "corners_visitante", "corners_contra", "corners_concedidos"])
     c_hthc = _col_disponible(df_raw, ["HTHC", "HC_1T", "corners_1t_local", "corners_1t"])
     c_htac = _col_disponible(df_raw, ["HTAC", "AC_1T", "corners_1t_visitante", "corners_2t"])
-    c_hf = _col_disponible(df_raw, ["HF", "faltas_local"])
-    c_af = _col_disponible(df_raw, ["AF", "faltas_visitante"])
-    c_hy = _col_disponible(df_raw, ["HY", "amarillas_local"])
-    c_ay = _col_disponible(df_raw, ["AY", "amarillas_visitante"])
-    c_hr = _col_disponible(df_raw, ["HR", "rojas_local"])
-    c_ar = _col_disponible(df_raw, ["AR", "rojas_visitante"])
+    c_hf = _col_disponible(df_raw, ["HF", "faltas_local", "faltas_cometidas"])
+    c_af = _col_disponible(df_raw, ["AF", "faltas_visitante", "faltas_recibidas"])
+    c_hy = _col_disponible(df_raw, ["HY", "amarillas_local", "amarillas_favor", "yellow_cards"])
+    c_ay = _col_disponible(df_raw, ["AY", "amarillas_visitante", "amarillas_contra"])
+    c_hr = _col_disponible(df_raw, ["HR", "rojas_local", "rojas_favor"])
+    c_ar = _col_disponible(df_raw, ["AR", "rojas_visitante", "rojas_contra"])
+
+    _cols_perspectiva_tiros = {"tiros_favor", "shots_favor", "remates_favor", "tiros"}
+    _cols_perspectiva_sot = {"sot_favor", "tiros_puerta_favor", "shots_on_target_favor"}
+    _cols_perspectiva_corners = {"corners_favor", "saques_esquina"}
+    _cols_perspectiva_faltas = {"faltas_cometidas"}
+    _cols_perspectiva_amar = {"amarillas_favor", "yellow_cards"}
+    _mapa_tel_bd = _obtener_mapa_telemetria_jugadores_bd()
 
     df_ord = _ordenar_por_fecha(df_raw)
     registros = []
     for _, row in df_ord.iterrows():
         home_t = str(row.get("HomeTeam", row.get("equipo_local", "")))
+        away_t = str(row.get("AwayTeam", row.get("equipo_visitante", "")))
         es_local = home_t == str(equipo)
+        riv_t = away_t if es_local else home_t
         hg = pd.to_numeric(row.get(c_hg), errors="coerce")
         ag = pd.to_numeric(row.get(c_ag), errors="coerce")
         if pd.isna(hg) or pd.isna(ag):
@@ -3379,19 +3490,85 @@ def _normalizar_partidos_equipo(df_raw, equipo):
         hst_v = pd.to_numeric(row.get(c_hst), errors="coerce") if c_hst else np.nan
         ast_v = pd.to_numeric(row.get(c_ast), errors="coerce") if c_ast else np.nan
 
-        tiros_f = float(hs_v if es_local else as_v) if pd.notna(hs_v if es_local else as_v) else np.nan
-        tiros_c = float(as_v if es_local else hs_v) if pd.notna(as_v if es_local else hs_v) else np.nan
-        sot_f = float(hst_v if es_local else ast_v) if pd.notna(hst_v if es_local else ast_v) else np.nan
-        sot_c = float(ast_v if es_local else hst_v) if pd.notna(ast_v if es_local else hst_v) else np.nan
+        if c_hs in _cols_perspectiva_tiros:
+            tiros_f = float(hs_v) if pd.notna(hs_v) else np.nan
+            tiros_c = float(as_v) if pd.notna(as_v) else np.nan
+        else:
+            tiros_f = float(hs_v if es_local else as_v) if pd.notna(hs_v if es_local else as_v) else np.nan
+            tiros_c = float(as_v if es_local else hs_v) if pd.notna(as_v if es_local else hs_v) else np.nan
+
+        if c_hst in _cols_perspectiva_sot:
+            sot_f = float(hst_v) if pd.notna(hst_v) else np.nan
+            sot_c = float(ast_v) if pd.notna(ast_v) else np.nan
+        else:
+            sot_f = float(hst_v if es_local else ast_v) if pd.notna(hst_v if es_local else ast_v) else np.nan
+            sot_c = float(ast_v if es_local else hst_v) if pd.notna(ast_v if es_local else hst_v) else np.nan
 
         hc_v = pd.to_numeric(row.get(c_hc), errors="coerce") if c_hc else np.nan
         ac_v = pd.to_numeric(row.get(c_ac), errors="coerce") if c_ac else np.nan
-        if c_hc == "corners_favor" and c_ac == "corners_contra":
+        if c_hc in _cols_perspectiva_corners:
             corners_f = float(hc_v) if pd.notna(hc_v) else np.nan
             corners_c = float(ac_v) if pd.notna(ac_v) else np.nan
         else:
             corners_f = float(hc_v if es_local else ac_v) if pd.notna(hc_v if es_local else ac_v) else np.nan
             corners_c = float(ac_v if es_local else hc_v) if pd.notna(ac_v if es_local else hc_v) else np.nan
+
+        hf_v = pd.to_numeric(row.get(c_hf), errors="coerce") if c_hf else np.nan
+        af_v = pd.to_numeric(row.get(c_af), errors="coerce") if c_af else np.nan
+        if c_hf in _cols_perspectiva_faltas:
+            faltas_com = float(hf_v) if pd.notna(hf_v) else np.nan
+            faltas_rec = float(af_v) if pd.notna(af_v) else np.nan
+        else:
+            faltas_com = float(hf_v if es_local else af_v) if pd.notna(hf_v if es_local else af_v) else np.nan
+            faltas_rec = float(af_v if es_local else hf_v) if pd.notna(af_v if es_local else hf_v) else np.nan
+
+        hy_v = pd.to_numeric(row.get(c_hy), errors="coerce") if c_hy else np.nan
+        ay_v = pd.to_numeric(row.get(c_ay), errors="coerce") if c_ay else np.nan
+        hr_v = pd.to_numeric(row.get(c_hr), errors="coerce") if c_hr else np.nan
+        ar_v = pd.to_numeric(row.get(c_ar), errors="coerce") if c_ar else np.nan
+
+        if c_hy in _cols_perspectiva_amar:
+            amar_prop = float(hy_v) if pd.notna(hy_v) else np.nan
+            amar_riv = float(ay_v) if pd.notna(ay_v) else np.nan
+            rojas_prop = float(hr_v) if pd.notna(hr_v) else np.nan
+            rojas_riv = float(ar_v) if pd.notna(ar_v) else np.nan
+        else:
+            amar_prop = float(hy_v if es_local else ay_v) if pd.notna(hy_v if es_local else ay_v) else np.nan
+            amar_riv = float(ay_v if es_local else hy_v) if pd.notna(ay_v if es_local else hy_v) else np.nan
+            rojas_prop = float(hr_v if es_local else ar_v) if pd.notna(hr_v if es_local else ar_v) else np.nan
+            rojas_riv = float(ar_v if es_local else hr_v) if pd.notna(ar_v if es_local else hr_v) else np.nan
+
+        # Enriquecimiento desde estadisticas_jugadores cuando historico_reciente carece de telemetría (equipos UEFA / no-Top-5)
+        _tel_eq = _mapa_tel_bd.get(str(equipo).strip())
+        _tel_rv = _mapa_tel_bd.get(str(riv_t).strip())
+        if _tel_eq is not None:
+            if pd.isna(tiros_f):
+                tiros_f = float(_tel_eq["tiros"])
+            if pd.isna(sot_f):
+                sot_f = float(_tel_eq["sot"])
+            if pd.isna(corners_f) and _tel_eq["corners"] > 0:
+                corners_f = float(_tel_eq["corners"])
+            if pd.isna(faltas_com):
+                faltas_com = float(_tel_eq["faltas_c"])
+            if pd.isna(faltas_rec):
+                faltas_rec = float(_tel_eq["faltas_r"])
+            if pd.isna(amar_prop):
+                amar_prop = float(_tel_eq["amar"])
+            if pd.isna(rojas_prop):
+                rojas_prop = float(_tel_eq["rojas"])
+        if _tel_rv is not None:
+            if pd.isna(tiros_c):
+                tiros_c = float(_tel_rv["tiros"])
+            if pd.isna(sot_c):
+                sot_c = float(_tel_rv["sot"])
+            if pd.isna(corners_c) and _tel_rv["corners"] > 0:
+                corners_c = float(_tel_rv["corners"])
+            if pd.isna(amar_riv):
+                amar_riv = float(_tel_rv["amar"])
+            if pd.isna(rojas_riv):
+                rojas_riv = float(_tel_rv["rojas"])
+            if pd.isna(faltas_rec) and _tel_eq is None:
+                faltas_rec = float(_tel_rv["faltas_c"])
 
         corners_tot = (corners_f + corners_c) if (pd.notna(corners_f) and pd.notna(corners_c)) else np.nan
         over85_corners = (1.0 if corners_tot > 8.5 else 0.0) if pd.notna(corners_tot) else np.nan
@@ -3442,21 +3619,6 @@ def _normalizar_partidos_equipo(df_raw, equipo):
             xg_c = max(0.10, 0.31 * sot_c)
         else:
             xg_c = gc
-
-        hf_v = pd.to_numeric(row.get(c_hf), errors="coerce") if c_hf else np.nan
-        af_v = pd.to_numeric(row.get(c_af), errors="coerce") if c_af else np.nan
-        faltas_com = float(hf_v if es_local else af_v) if pd.notna(hf_v if es_local else af_v) else np.nan
-        faltas_rec = float(af_v if es_local else hf_v) if pd.notna(af_v if es_local else hf_v) else np.nan
-
-        hy_v = pd.to_numeric(row.get(c_hy), errors="coerce") if c_hy else np.nan
-        ay_v = pd.to_numeric(row.get(c_ay), errors="coerce") if c_ay else np.nan
-        hr_v = pd.to_numeric(row.get(c_hr), errors="coerce") if c_hr else np.nan
-        ar_v = pd.to_numeric(row.get(c_ar), errors="coerce") if c_ar else np.nan
-
-        amar_prop = float(hy_v if es_local else ay_v) if pd.notna(hy_v if es_local else ay_v) else np.nan
-        amar_riv = float(ay_v if es_local else hy_v) if pd.notna(ay_v if es_local else hy_v) else np.nan
-        rojas_prop = float(hr_v if es_local else ar_v) if pd.notna(hr_v if es_local else ar_v) else np.nan
-        rojas_riv = float(ar_v if es_local else hr_v) if pd.notna(ar_v if es_local else hr_v) else np.nan
 
         registros.append({
             "Date": row.get("Date", row.get("fecha", "N/A")),
@@ -3565,10 +3727,10 @@ def _calcular_resumen_bloque(df_norm, usar_decay=False, media_liga_gf=1.35, medi
     gc_med = _media_ponderada_segura(df_norm, "gc", usar_decay=usar_decay)
     xg_f = _media_ponderada_segura(df_norm, "xg_f", usar_decay=usar_decay, default=gf_med)
     xg_c = _media_ponderada_segura(df_norm, "xg_c", usar_decay=usar_decay, default=gc_med)
-    tiros_f = _media_con_fb("tiros_f", 11.5)
-    tiros_c = _media_con_fb("tiros_c", 11.5)
-    sot_f = _media_con_fb("sot_f", 4.0)
-    sot_c = _media_con_fb("sot_c", 4.0)
+    tiros_f = _media_con_fb("tiros_f", 0.0)
+    tiros_c = _media_con_fb("tiros_c", 0.0)
+    sot_f = _media_con_fb("sot_f", 0.0)
+    sot_c = _media_con_fb("sot_c", 0.0)
 
     sot_ratio = (sot_f / tiros_f * 100.0) if tiros_f > 0 else 0.0
     sot_ratio_c = (sot_c / tiros_c * 100.0) if tiros_c > 0 else 0.0
@@ -3583,10 +3745,10 @@ def _calcular_resumen_bloque(df_norm, usar_decay=False, media_liga_gf=1.35, medi
     else:
         n_corners = 0
 
-    corners_f = _media_con_fb("corners_f", 5.2)
-    corners_c = _media_con_fb("corners_c", 4.4)
+    corners_f = _media_con_fb("corners_f", 0.0)
+    corners_c = _media_con_fb("corners_c", 0.0)
     corners_tot = _media_con_fb("corners_tot", corners_f + corners_c)
-    over85_corners = _media_con_fb("over85_corners", 0.55) * 100.0
+    over85_corners = _media_con_fb("over85_corners", 0.0) * 100.0
 
     cor_f_1t_m = _media_con_fb("cor_f_1t", corners_f * 0.45)
     cor_f_2t_m = _media_con_fb("cor_f_2t", corners_f * 0.55)
@@ -3610,12 +3772,12 @@ def _calcular_resumen_bloque(df_norm, usar_decay=False, media_liga_gf=1.35, medi
     gc_1t_pct = (gc_1t_m / sum_gc_ht * 100.0) if sum_gc_ht > 0 else 45.0
     gc_2t_pct = 100.0 - gc_1t_pct
 
-    amar_prop = _media_con_fb("amar_prop", 2.0)
+    amar_prop = _media_con_fb("amar_prop", 0.0)
     rojas_prop = _media_con_fb("rojas_prop", 0.0)
-    amar_riv = _media_con_fb("amar_riv", 2.0)
+    amar_riv = _media_con_fb("amar_riv", 0.0)
     rojas_riv = _media_con_fb("rojas_riv", 0.0)
-    faltas_com = _media_con_fb("faltas_com", 11.5)
-    faltas_rec = _media_con_fb("faltas_rec", 11.5)
+    faltas_com = _media_con_fb("faltas_com", 0.0)
+    faltas_rec = _media_con_fb("faltas_rec", 0.0)
     faltas_por_amarilla = (faltas_com / amar_prop) if amar_prop > 0.05 else faltas_com
     friccion_idx = faltas_com + faltas_rec + amar_prop + amar_riv + rojas_prop + rojas_riv
 
@@ -7078,8 +7240,10 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
 .st-key-h2h_modo_muestra div[data-baseweb="select"] * {
     color: #f8fafc !important;
 }
-/* H2H · Ventana Homogénea (N) como píldoras segmentadas */
-.st-key-h2h_n_homogeneo div[role="radiogroup"] {
+/* H2H · Ventana Homogénea (N), Modo Radiografía y Selector Poisson como píldoras segmentadas */
+.st-key-h2h_n_homogeneo div[role="radiogroup"],
+.st-key-modo_radiografia_h2h div[role="radiogroup"],
+.st-key-radio_poisson_unificado div[role="radiogroup"] {
     display: flex !important;
     flex-direction: row !important;
     gap: 6px !important;
@@ -7088,7 +7252,17 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
     border-radius: 8px !important;
     border: 1px solid rgba(99, 102, 241, 0.25) !important;
 }
-.st-key-h2h_n_homogeneo label {
+.st-key-modo_radiografia_h2h div[role="radiogroup"] {
+    justify-content: flex-end !important;
+    width: fit-content !important;
+    margin-left: auto !important;
+}
+.st-key-radio_poisson_unificado div[role="radiogroup"] {
+    width: fit-content !important;
+}
+.st-key-h2h_n_homogeneo label,
+.st-key-modo_radiografia_h2h label,
+.st-key-radio_poisson_unificado label {
     background: transparent !important;
     padding: 6px 16px !important;
     border-radius: 6px !important;
@@ -7096,13 +7270,21 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
     cursor: pointer !important;
     border: 1px solid transparent !important;
 }
-.st-key-h2h_n_homogeneo label > div:first-child { display: none !important; }
-.st-key-h2h_n_homogeneo label p { color: #94a3b8 !important; font-size: 0.8rem !important; margin: 0 !important; }
-.st-key-h2h_n_homogeneo label:has(input:checked) {
+.st-key-h2h_n_homogeneo label > div:first-child,
+.st-key-modo_radiografia_h2h label > div:first-child,
+.st-key-radio_poisson_unificado label > div:first-child { display: none !important; }
+.st-key-h2h_n_homogeneo label p,
+.st-key-modo_radiografia_h2h label p,
+.st-key-radio_poisson_unificado label p { color: #94a3b8 !important; font-size: 0.8rem !important; margin: 0 !important; }
+.st-key-h2h_n_homogeneo label:has(input:checked),
+.st-key-modo_radiografia_h2h label:has(input:checked),
+.st-key-radio_poisson_unificado label:has(input:checked) {
     background: rgba(56, 189, 248, 0.18) !important;
     border-color: rgba(56, 189, 248, 0.45) !important;
 }
-.st-key-h2h_n_homogeneo label:has(input:checked) p { color: #38bdf8 !important; font-weight: 700 !important; }
+.st-key-h2h_n_homogeneo label:has(input:checked) p,
+.st-key-modo_radiografia_h2h label:has(input:checked) p,
+.st-key-radio_poisson_unificado label:has(input:checked) p { color: #38bdf8 !important; font-weight: 700 !important; }
 /* H2H · Botón Invertir */
 .st-key-btn_swap_h2h button {
     background: rgba(15, 23, 42, 0.75) !important;
@@ -7732,50 +7914,59 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
             else:
                 xga_v = _media_global_equipo(df_eq2_all, eq2, "HxG", "AxG", gc_v) * (factor_ventaja_local if relajo_vis else 1.0)
 
-            _tiene_corners_l = (
-                "HC" in _df_tact_l.columns
-                and "AC" in _df_tact_l.columns
-                and _df_tact_l["HC"].notna().any()
-                and float((_df_tact_l["HC"].fillna(0) + _df_tact_l["AC"].fillna(0)).mean()) > 0.0
+            _df_h2h_norm_home = _normalizar_partidos_equipo(
+                df_eq1_all.tail(5) if relajo_local else df_eq1_home.tail(int(n_homogeneo_h2h)),
+                eq1,
             )
-            _tiene_corners_v = (
-                "HC" in _df_tact_v.columns
-                and "AC" in _df_tact_v.columns
-                and _df_tact_v["HC"].notna().any()
-                and float((_df_tact_v["HC"].fillna(0) + _df_tact_v["AC"].fillna(0)).mean()) > 0.0
-            )
-            cor_l = (
-                float((_df_tact_l["HC"].dropna() + _df_tact_l["AC"].dropna()).mean())
-                if _tiene_corners_l
-                else None
-            )
-            cor_v = (
-                float((_df_tact_v["HC"].dropna() + _df_tact_v["AC"].dropna()).mean())
-                if _tiene_corners_v
-                else None
+            _df_h2h_norm_away = _normalizar_partidos_equipo(
+                df_eq2_all.tail(5) if relajo_vis else df_eq2_away.tail(int(n_homogeneo_h2h)),
+                eq2,
             )
 
-            faltas_l = (
-                float(df_eq1_home["HF"].dropna().mean())
-                if (not relajo_local and "HF" in df_eq1_home.columns and df_eq1_home["HF"].notna().any())
-                else _media_global_equipo(df_eq1_all, eq1, "HF", "AF", 11.5)
+            # Sellar fuga de df_fallback cuando se exige aislamiento de competición (UEFA)
+            if modo_muestra_h2h == "Solo esta Competición (UEFA)":
+                _df_h2h_fb_home = _df_h2h_norm_home.copy()
+                _df_h2h_fb_away = _df_h2h_norm_away.copy()
+            else:
+                _df_h2h_fb_home_all = _normalizar_partidos_equipo(
+                    df_eq1_all_full[df_eq1_all_full["HomeTeam"] == eq1],
+                    eq1,
+                )
+                _df_h2h_fb_away_all = _normalizar_partidos_equipo(
+                    df_eq2_all_full[df_eq2_all_full["AwayTeam"] == eq2],
+                    eq2,
+                )
+                if not _df_h2h_fb_home_all.empty and "corners_f" in _df_h2h_fb_home_all.columns:
+                    _df_h2h_fb_home = _df_h2h_fb_home_all[_df_h2h_fb_home_all["corners_f"].notna()].tail(int(n_homogeneo_h2h)).copy()
+                else:
+                    _df_h2h_fb_home = _df_h2h_fb_home_all.tail(int(n_homogeneo_h2h)).copy()
+
+                if not _df_h2h_fb_away_all.empty and "corners_f" in _df_h2h_fb_away_all.columns:
+                    _df_h2h_fb_away = _df_h2h_fb_away_all[_df_h2h_fb_away_all["corners_f"].notna()].tail(int(n_homogeneo_h2h)).copy()
+                else:
+                    _df_h2h_fb_away = _df_h2h_fb_away_all.tail(int(n_homogeneo_h2h)).copy()
+
+            _stats_h2h_home = _calcular_resumen_bloque(
+                _df_h2h_norm_home,
+                usar_decay=False,
+                media_liga_gf=_comp_hg_mean,
+                media_liga_gc=_comp_ag_mean,
+                df_fallback=_df_h2h_fb_home,
             )
-            faltas_v = (
-                float(df_eq2_away["AF"].dropna().mean())
-                if (not relajo_vis and "AF" in df_eq2_away.columns and df_eq2_away["AF"].notna().any())
-                else _media_global_equipo(df_eq2_all, eq2, "HF", "AF", 11.8)
+            _stats_h2h_away = _calcular_resumen_bloque(
+                _df_h2h_norm_away,
+                usar_decay=False,
+                media_liga_gf=_comp_ag_mean,
+                media_liga_gc=_comp_hg_mean,
+                df_fallback=_df_h2h_fb_away,
             )
 
-            sot_l = (
-                float(df_eq1_home["HST"].dropna().mean())
-                if (not relajo_local and "HST" in df_eq1_home.columns and df_eq1_home["HST"].notna().any())
-                else _media_global_equipo(df_eq1_all, eq1, "HST", "AST", 4.5) * (factor_ventaja_local if relajo_local else 1.0)
-            )
-            sot_v = (
-                float(df_eq2_away["AST"].dropna().mean())
-                if (not relajo_vis and "AST" in df_eq2_away.columns and df_eq2_away["AST"].notna().any())
-                else _media_global_equipo(df_eq2_all, eq2, "HST", "AST", 3.8) * (factor_ventaja_vis if relajo_vis else 1.0)
-            )
+            cor_l = float(_stats_h2h_home.get("corners_tot", 0.0))
+            cor_v = float(_stats_h2h_away.get("corners_tot", 0.0))
+            faltas_l = float(_stats_h2h_home.get("faltas_com", 0.0))
+            faltas_v = float(_stats_h2h_away.get("faltas_com", 0.0))
+            sot_l = float(_stats_h2h_home.get("sot_f", 0.0))
+            sot_v = float(_stats_h2h_away.get("sot_f", 0.0))
 
             categorias_tacticas = [
                 "Eficiencia Ofensiva (Goles)",
@@ -8006,97 +8197,292 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
 
             # ── 4B. ANÁLISIS COMPARATIVO: CONDICIÓN LOCAL VS CONDICIÓN VISITANTE ──
             st.markdown("---")
-            st.subheader("🏠 Análisis Comparativo: Condición Local vs ✈️ Condición Visitante")
 
-            _df_h2h_norm_home = _normalizar_partidos_equipo(
-                df_eq1_all.tail(5) if relajo_local else df_eq1_home.tail(int(n_homogeneo_h2h)),
-                eq1,
-            )
-            _df_h2h_norm_away = _normalizar_partidos_equipo(
-                df_eq2_all.tail(5) if relajo_vis else df_eq2_away.tail(int(n_homogeneo_h2h)),
-                eq2,
-            )
+            df_eq1_global = df_eq1_all_full if not df_eq1_all_full.empty else df_eq1_all
+            df_eq2_global = df_eq2_all_full if not df_eq2_all_full.empty else df_eq2_all
 
-            # Sellar fuga de df_fallback cuando se exige aislamiento de competición (UEFA)
-            if modo_muestra_h2h == "Solo esta Competición (UEFA)":
-                _df_h2h_fb_home = _df_h2h_norm_home.copy()
-                _df_h2h_fb_away = _df_h2h_norm_away.copy()
-                _falta_tel_uefa = (
-                    (_df_h2h_norm_home.empty or "tiros_f" not in _df_h2h_norm_home.columns or _df_h2h_norm_home["tiros_f"].dropna().empty)
-                    or (_df_h2h_norm_away.empty or "tiros_f" not in _df_h2h_norm_away.columns or _df_h2h_norm_away["tiros_f"].dropna().empty)
+            col_tit, col_selector = st.columns((0.60, 0.40))
+            with col_selector:
+                modo_radio = st.radio(
+                    label="Modo de Radiografía",
+                    options=("Condición Específica", "Rendimiento General"),
+                    index=0,
+                    horizontal=True,
+                    label_visibility="collapsed",
+                    key="modo_radiografia_h2h",
                 )
-                if _falta_tel_uefa:
-                    st.caption(
-                        "ℹ️ **Aislamiento estricto UEFA activo:** Los registros de esta competición no contienen desglose crudo `HS/HST/HC` en `historico_reciente`; "
-                        "se bloquea el arrastre silencioso desde ligas domésticas."
-                    )
+
+            if modo_radio == "Condición Específica":
+                _stats_radio_eq1 = _stats_h2h_home
+                _stats_radio_eq2 = _stats_h2h_away
+                n_partidos_eq1 = int(_stats_radio_eq1.get("n", len(df_eq1_home)))
+                n_partidos_eq2 = int(_stats_radio_eq2.get("n", len(df_eq2_away)))
+                label_muestra = f"{eq1} ({n_partidos_eq1} p. Casa) vs {eq2} ({n_partidos_eq2} p. Fuera)"
+                tag_eq1 = f"{eq1[:3].upper()} CASA"
+                tag_eq2 = f"{eq2[:3].upper()} FUERA"
             else:
-                _df_h2h_fb_home_all = _normalizar_partidos_equipo(
-                    df_eq1_all_full[df_eq1_all_full["HomeTeam"] == eq1],
-                    eq1,
+                _df_h2h_norm_glob_eq1 = _normalizar_partidos_equipo(df_eq1_global, eq1)
+                _df_h2h_norm_glob_eq2 = _normalizar_partidos_equipo(df_eq2_global, eq2)
+                _stats_radio_eq1 = _calcular_resumen_bloque(
+                    _df_h2h_norm_glob_eq1,
+                    usar_decay=False,
+                    media_liga_gf=_comp_hg_mean,
+                    media_liga_gc=_comp_ag_mean,
+                    df_fallback=_df_h2h_norm_glob_eq1,
                 )
-                _df_h2h_fb_away_all = _normalizar_partidos_equipo(
-                    df_eq2_all_full[df_eq2_all_full["AwayTeam"] == eq2],
-                    eq2,
+                _stats_radio_eq2 = _calcular_resumen_bloque(
+                    _df_h2h_norm_glob_eq2,
+                    usar_decay=False,
+                    media_liga_gf=_comp_ag_mean,
+                    media_liga_gc=_comp_hg_mean,
+                    df_fallback=_df_h2h_norm_glob_eq2,
                 )
-                if not _df_h2h_fb_home_all.empty and "corners_f" in _df_h2h_fb_home_all.columns:
-                    _df_h2h_fb_home = _df_h2h_fb_home_all[_df_h2h_fb_home_all["corners_f"].notna()].tail(int(n_homogeneo_h2h)).copy()
-                else:
-                    _df_h2h_fb_home = _df_h2h_fb_home_all.tail(int(n_homogeneo_h2h)).copy()
+                n_partidos_eq1 = int(_stats_radio_eq1.get("n", len(df_eq1_global)))
+                n_partidos_eq2 = int(_stats_radio_eq2.get("n", len(df_eq2_global)))
+                label_muestra = f"{eq1} ({len(df_eq1_global)} p. Totales) vs {eq2} ({len(df_eq2_global)} p. Totales)"
+                tag_eq1 = f"{eq1[:3].upper()} GLOBAL"
+                tag_eq2 = f"{eq2[:3].upper()} GLOBAL"
 
-                if not _df_h2h_fb_away_all.empty and "corners_f" in _df_h2h_fb_away_all.columns:
-                    _df_h2h_fb_away = _df_h2h_fb_away_all[_df_h2h_fb_away_all["corners_f"].notna()].tail(int(n_homogeneo_h2h)).copy()
-                else:
-                    _df_h2h_fb_away = _df_h2h_fb_away_all.tail(int(n_homogeneo_h2h)).copy()
+            remates_favor_eq1 = float(_stats_radio_eq1.get("tiros_f", 0.0))
+            remates_favor_eq2 = float(_stats_radio_eq2.get("tiros_f", 0.0))
+            sot_favor_eq1 = float(_stats_radio_eq1.get("sot_f", 0.0))
+            sot_favor_eq2 = float(_stats_radio_eq2.get("sot_f", 0.0))
+            punteria_eq1 = (sot_favor_eq1 / remates_favor_eq1 * 100.0) if remates_favor_eq1 > 0 else 0.0
+            punteria_eq2 = (sot_favor_eq2 / remates_favor_eq2 * 100.0) if remates_favor_eq2 > 0 else 0.0
+            goles_favor_eq1 = float(_stats_radio_eq1.get("gf_med", 0.0))
+            goles_favor_eq2 = float(_stats_radio_eq2.get("gf_med", 0.0))
 
-            _stats_h2h_home = _calcular_resumen_bloque(
-                _df_h2h_norm_home,
-                usar_decay=False,
-                media_liga_gf=_comp_hg_mean,
-                media_liga_gc=_comp_ag_mean,
-                df_fallback=_df_h2h_fb_home,
+            remates_contra_eq1 = float(_stats_radio_eq1.get("tiros_c", 0.0))
+            remates_contra_eq2 = float(_stats_radio_eq2.get("tiros_c", 0.0))
+            sot_contra_eq1 = float(_stats_radio_eq1.get("sot_c", 0.0))
+            sot_contra_eq2 = float(_stats_radio_eq2.get("sot_c", 0.0))
+            goles_contra_eq1 = float(_stats_radio_eq1.get("gc_med", 0.0))
+            goles_contra_eq2 = float(_stats_radio_eq2.get("gc_med", 0.0))
+            cs_pct_eq1 = float(_stats_radio_eq1.get("clean_sheet", 0.0))
+            cs_pct_eq2 = float(_stats_radio_eq2.get("clean_sheet", 0.0))
+
+            corn_favor_eq1 = float(_stats_radio_eq1.get("corners_f", 0.0))
+            corn_favor_eq2 = float(_stats_radio_eq2.get("corners_f", 0.0))
+            corn_contra_eq1 = float(_stats_radio_eq1.get("corners_c", 0.0))
+            corn_contra_eq2 = float(_stats_radio_eq2.get("corners_c", 0.0))
+            corn_tot_eq1 = float(_stats_radio_eq1.get("corners_tot", corn_favor_eq1 + corn_contra_eq1))
+            corn_tot_eq2 = float(_stats_radio_eq2.get("corners_tot", corn_favor_eq2 + corn_contra_eq2))
+            pct_over85_corn_eq1 = float(_stats_radio_eq1.get("over85_corners", 0.0))
+            pct_over85_corn_eq2 = float(_stats_radio_eq2.get("over85_corners", 0.0))
+
+            faltas_com_eq1 = float(_stats_radio_eq1.get("faltas_com", 0.0))
+            faltas_com_eq2 = float(_stats_radio_eq2.get("faltas_com", 0.0))
+            faltas_rec_eq1 = float(_stats_radio_eq1.get("faltas_rec", 0.0))
+            faltas_rec_eq2 = float(_stats_radio_eq2.get("faltas_rec", 0.0))
+            tarjetas_eq1 = float(_stats_radio_eq1.get("amar_prop", 0.0))
+            tarjetas_eq2 = float(_stats_radio_eq2.get("amar_prop", 0.0))
+            tarjetas_prov_eq1 = float(_stats_radio_eq1.get("amar_riv", 0.0))
+            tarjetas_prov_eq2 = float(_stats_radio_eq2.get("amar_riv", 0.0))
+
+            bento_tactico_html = (
+                f'<div style="margin-top: 8px; margin-bottom: 22px;">\n'
+                f'<!-- CABECERA DEL BLOQUE -->\n'
+                f'<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;">\n'
+                f'<div style="display: flex; align-items: center; gap: 8px;">\n'
+                f'<span style="font-size: 1.1rem;">📊</span>\n'
+                f'<span style="font-size: 0.95rem; font-weight: 700; color: #f8fafc; letter-spacing: 0.3px;">Radiografía Táctica Cara a Cara</span>\n'
+                f'</div>\n'
+                f'<div style="display: flex; align-items: center; gap: 8px; font-size: 0.72rem; color: #94a3b8; background: rgba(15, 23, 42, 0.6); padding: 5px 12px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.08);">\n'
+                f'<span>Muestra oficial:</span> <strong style="color: #38bdf8;">{label_muestra}</strong>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'<!-- BENTO GRID 2x2 -->\n'
+                f'<div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px;">\n'
+                f'<!-- PANEL 1: ATAQUE & GENERACIÓN DE TIRO -->\n'
+                f'<div style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 10px; padding: 16px;">\n'
+                f'<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); padding-bottom: 8px;">\n'
+                f'<span style="font-size: 0.78rem; font-weight: 700; color: #38bdf8; letter-spacing: 0.4px; text-transform: uppercase;">🎯 Generación Ofensiva y Remate</span>\n'
+                f'<div style="display: flex; gap: 6px; font-size: 0.65rem; font-weight: 700;">\n'
+                f'<span style="color: #38bdf8; background: rgba(56, 189, 248, 0.12); padding: 2px 6px; border-radius: 4px;">{tag_eq1}</span>\n'
+                f'<span style="color: #818cf8; background: rgba(129, 140, 248, 0.12); padding: 2px 6px; border-radius: 4px;">{tag_eq2}</span>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'<div style="display: flex; flex-direction: column; gap: 8px;">\n'
+                f'<div style="display: flex; justify-content: space-between; align-items: center;">\n'
+                f'<span style="font-size: 0.70rem; color: #94a3b8; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase;">Remates Totales</span>\n'
+                f'<div style="display: flex; align-items: center; gap: 8px; font-family: monospace; font-size: 0.88rem; font-weight: 700;">\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #38bdf8; padding: 3px 8px; border-radius: 4px;">{remates_favor_eq1:.1f}</span>\n'
+                f'<span style="color: #475569; font-size: 0.75rem;">—</span>\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #818cf8; padding: 3px 8px; border-radius: 4px;">{remates_favor_eq2:.1f}</span>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'<div style="display: flex; justify-content: space-between; align-items: center;">\n'
+                f'<span style="font-size: 0.70rem; color: #94a3b8; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase;">Tiros a Puerta (SOT)</span>\n'
+                f'<div style="display: flex; align-items: center; gap: 8px; font-family: monospace; font-size: 0.88rem; font-weight: 700;">\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #38bdf8; padding: 3px 8px; border-radius: 4px;">{sot_favor_eq1:.1f}</span>\n'
+                f'<span style="color: #475569; font-size: 0.75rem;">—</span>\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #818cf8; padding: 3px 8px; border-radius: 4px;">{sot_favor_eq2:.1f}</span>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'<div style="display: flex; justify-content: space-between; align-items: center;">\n'
+                f'<span style="font-size: 0.70rem; color: #94a3b8; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase;">Precisión de Tiro</span>\n'
+                f'<div style="display: flex; align-items: center; gap: 8px; font-family: monospace; font-size: 0.88rem; font-weight: 700;">\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #38bdf8; padding: 3px 8px; border-radius: 4px;">{punteria_eq1:.1f}%</span>\n'
+                f'<span style="color: #475569; font-size: 0.75rem;">—</span>\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #818cf8; padding: 3px 8px; border-radius: 4px;">{punteria_eq2:.1f}%</span>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'<div style="display: flex; justify-content: space-between; align-items: center;">\n'
+                f'<span style="font-size: 0.70rem; color: #94a3b8; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase;">Goles Anotados p/p</span>\n'
+                f'<div style="display: flex; align-items: center; gap: 8px; font-family: monospace; font-size: 0.88rem; font-weight: 700;">\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #38bdf8; padding: 3px 8px; border-radius: 4px;">{goles_favor_eq1:.2f}</span>\n'
+                f'<span style="color: #475569; font-size: 0.75rem;">—</span>\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #818cf8; padding: 3px 8px; border-radius: 4px;">{goles_favor_eq2:.2f}</span>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'<!-- PANEL 2: CONCESIÓN Y RESISTENCIA DEFENSIVA -->\n'
+                f'<div style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 10px; padding: 16px;">\n'
+                f'<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); padding-bottom: 8px;">\n'
+                f'<span style="font-size: 0.78rem; font-weight: 700; color: #f87171; letter-spacing: 0.4px; text-transform: uppercase;">🛡️ Concesión y Resistencia Defensiva</span>\n'
+                f'<div style="display: flex; gap: 6px; font-size: 0.65rem; font-weight: 700;">\n'
+                f'<span style="color: #38bdf8; background: rgba(56, 189, 248, 0.12); padding: 2px 6px; border-radius: 4px;">{tag_eq1}</span>\n'
+                f'<span style="color: #818cf8; background: rgba(129, 140, 248, 0.12); padding: 2px 6px; border-radius: 4px;">{tag_eq2}</span>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'<div style="display: flex; flex-direction: column; gap: 8px;">\n'
+                f'<div style="display: flex; justify-content: space-between; align-items: center;">\n'
+                f'<span style="font-size: 0.70rem; color: #94a3b8; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase;">Remates Concedidos</span>\n'
+                f'<div style="display: flex; align-items: center; gap: 8px; font-family: monospace; font-size: 0.88rem; font-weight: 700;">\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #38bdf8; padding: 3px 8px; border-radius: 4px;">{remates_contra_eq1:.1f}</span>\n'
+                f'<span style="color: #475569; font-size: 0.75rem;">—</span>\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #818cf8; padding: 3px 8px; border-radius: 4px;">{remates_contra_eq2:.1f}</span>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'<div style="display: flex; justify-content: space-between; align-items: center;">\n'
+                f'<span style="font-size: 0.70rem; color: #94a3b8; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase;">SOT Recibidos en Contra</span>\n'
+                f'<div style="display: flex; align-items: center; gap: 8px; font-family: monospace; font-size: 0.88rem; font-weight: 700;">\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #38bdf8; padding: 3px 8px; border-radius: 4px;">{sot_contra_eq1:.1f}</span>\n'
+                f'<span style="color: #475569; font-size: 0.75rem;">—</span>\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #818cf8; padding: 3px 8px; border-radius: 4px;">{sot_contra_eq2:.1f}</span>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'<div style="display: flex; justify-content: space-between; align-items: center;">\n'
+                f'<span style="font-size: 0.70rem; color: #94a3b8; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase;">Goles Encajados p/p</span>\n'
+                f'<div style="display: flex; align-items: center; gap: 8px; font-family: monospace; font-size: 0.88rem; font-weight: 700;">\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #f87171; padding: 3px 8px; border-radius: 4px;">{goles_contra_eq1:.2f}</span>\n'
+                f'<span style="color: #475569; font-size: 0.75rem;">—</span>\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #f87171; padding: 3px 8px; border-radius: 4px;">{goles_contra_eq2:.2f}</span>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'<div style="display: flex; justify-content: space-between; align-items: center;">\n'
+                f'<span style="font-size: 0.70rem; color: #94a3b8; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase;">Portería a Cero (Clean Sheet)</span>\n'
+                f'<div style="display: flex; align-items: center; gap: 8px; font-family: monospace; font-size: 0.88rem; font-weight: 700;">\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #10b981; padding: 3px 8px; border-radius: 4px;">{cs_pct_eq1:.1f}%</span>\n'
+                f'<span style="color: #475569; font-size: 0.75rem;">—</span>\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #10b981; padding: 3px 8px; border-radius: 4px;">{cs_pct_eq2:.1f}%</span>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'<!-- PANEL 3: BALÓN PARADO & CÓRNERS -->\n'
+                f'<div style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(129, 140, 248, 0.25); border-radius: 10px; padding: 16px;">\n'
+                f'<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); padding-bottom: 8px;">\n'
+                f'<span style="font-size: 0.78rem; font-weight: 700; color: #818cf8; letter-spacing: 0.4px; text-transform: uppercase;">📐 Balón Parado · Córners</span>\n'
+                f'<div style="display: flex; gap: 6px; font-size: 0.65rem; font-weight: 700;">\n'
+                f'<span style="color: #38bdf8; background: rgba(56, 189, 248, 0.12); padding: 2px 6px; border-radius: 4px;">{tag_eq1}</span>\n'
+                f'<span style="color: #818cf8; background: rgba(129, 140, 248, 0.12); padding: 2px 6px; border-radius: 4px;">{tag_eq2}</span>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'<div style="display: flex; flex-direction: column; gap: 8px;">\n'
+                f'<div style="display: flex; justify-content: space-between; align-items: center;">\n'
+                f'<span style="font-size: 0.70rem; color: #94a3b8; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase;">Córners a Favor p/p</span>\n'
+                f'<div style="display: flex; align-items: center; gap: 8px; font-family: monospace; font-size: 0.88rem; font-weight: 700;">\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #38bdf8; padding: 3px 8px; border-radius: 4px;">{corn_favor_eq1:.1f}</span>\n'
+                f'<span style="color: #475569; font-size: 0.75rem;">—</span>\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #818cf8; padding: 3px 8px; border-radius: 4px;">{corn_favor_eq2:.1f}</span>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'<div style="display: flex; justify-content: space-between; align-items: center;">\n'
+                f'<span style="font-size: 0.70rem; color: #94a3b8; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase;">Córners Concedidos</span>\n'
+                f'<div style="display: flex; align-items: center; gap: 8px; font-family: monospace; font-size: 0.88rem; font-weight: 700;">\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #38bdf8; padding: 3px 8px; border-radius: 4px;">{corn_contra_eq1:.1f}</span>\n'
+                f'<span style="color: #475569; font-size: 0.75rem;">—</span>\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #818cf8; padding: 3px 8px; border-radius: 4px;">{corn_contra_eq2:.1f}</span>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'<div style="display: flex; justify-content: space-between; align-items: center;">\n'
+                f'<span style="font-size: 0.70rem; color: #94a3b8; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase;">Media Total en sus Partidos</span>\n'
+                f'<div style="display: flex; align-items: center; gap: 8px; font-family: monospace; font-size: 0.88rem; font-weight: 700;">\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #38bdf8; padding: 3px 8px; border-radius: 4px;">{corn_tot_eq1:.1f}</span>\n'
+                f'<span style="color: #475569; font-size: 0.75rem;">—</span>\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #818cf8; padding: 3px 8px; border-radius: 4px;">{corn_tot_eq2:.1f}</span>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'<div style="display: flex; justify-content: space-between; align-items: center;">\n'
+                f'<span style="font-size: 0.70rem; color: #94a3b8; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase;">Frecuencia Over 8.5 Córners</span>\n'
+                f'<div style="display: flex; align-items: center; gap: 8px; font-family: monospace; font-size: 0.88rem; font-weight: 700;">\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #10b981; padding: 3px 8px; border-radius: 4px;">{pct_over85_corn_eq1:.1f}%</span>\n'
+                f'<span style="color: #475569; font-size: 0.75rem;">—</span>\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #10b981; padding: 3px 8px; border-radius: 4px;">{pct_over85_corn_eq2:.1f}%</span>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'<!-- PANEL 4: DISCIPLINA, FALTAS & FRICCIÓN -->\n'
+                f'<div style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(245, 158, 11, 0.25); border-radius: 10px; padding: 16px;">\n'
+                f'<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); padding-bottom: 8px;">\n'
+                f'<span style="font-size: 0.78rem; font-weight: 700; color: #fbbf24; letter-spacing: 0.4px; text-transform: uppercase;">🟨 Disciplina, Faltas y Fricción</span>\n'
+                f'<div style="display: flex; gap: 6px; font-size: 0.65rem; font-weight: 700;">\n'
+                f'<span style="color: #38bdf8; background: rgba(56, 189, 248, 0.12); padding: 2px 6px; border-radius: 4px;">{tag_eq1}</span>\n'
+                f'<span style="color: #818cf8; background: rgba(129, 140, 248, 0.12); padding: 2px 6px; border-radius: 4px;">{tag_eq2}</span>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'<div style="display: flex; flex-direction: column; gap: 8px;">\n'
+                f'<div style="display: flex; justify-content: space-between; align-items: center;">\n'
+                f'<span style="font-size: 0.70rem; color: #94a3b8; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase;">Faltas Cometidas p/p</span>\n'
+                f'<div style="display: flex; align-items: center; gap: 8px; font-family: monospace; font-size: 0.88rem; font-weight: 700;">\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #38bdf8; padding: 3px 8px; border-radius: 4px;">{faltas_com_eq1:.1f}</span>\n'
+                f'<span style="color: #475569; font-size: 0.75rem;">—</span>\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #818cf8; padding: 3px 8px; border-radius: 4px;">{faltas_com_eq2:.1f}</span>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'<div style="display: flex; justify-content: space-between; align-items: center;">\n'
+                f'<span style="font-size: 0.70rem; color: #94a3b8; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase;">Faltas Recibidas / Provocadas</span>\n'
+                f'<div style="display: flex; align-items: center; gap: 8px; font-family: monospace; font-size: 0.88rem; font-weight: 700;">\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #38bdf8; padding: 3px 8px; border-radius: 4px;">{faltas_rec_eq1:.1f}</span>\n'
+                f'<span style="color: #475569; font-size: 0.75rem;">—</span>\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #818cf8; padding: 3px 8px; border-radius: 4px;">{faltas_rec_eq2:.1f}</span>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'<div style="display: flex; justify-content: space-between; align-items: center;">\n'
+                f'<span style="font-size: 0.70rem; color: #94a3b8; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase;">Tarjetas Amarillas Propias</span>\n'
+                f'<div style="display: flex; align-items: center; gap: 8px; font-family: monospace; font-size: 0.88rem; font-weight: 700;">\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #fbbf24; padding: 3px 8px; border-radius: 4px;">{tarjetas_eq1:.2f}</span>\n'
+                f'<span style="color: #475569; font-size: 0.75rem;">—</span>\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #fbbf24; padding: 3px 8px; border-radius: 4px;">{tarjetas_eq2:.2f}</span>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'<div style="display: flex; justify-content: space-between; align-items: center;">\n'
+                f'<span style="font-size: 0.70rem; color: #94a3b8; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase;">Tarjetas Provocadas al Rival</span>\n'
+                f'<div style="display: flex; align-items: center; gap: 8px; font-family: monospace; font-size: 0.88rem; font-weight: 700;">\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #38bdf8; padding: 3px 8px; border-radius: 4px;">{tarjetas_prov_eq1:.2f}</span>\n'
+                f'<span style="color: #475569; font-size: 0.75rem;">—</span>\n'
+                f'<span style="background: rgba(255, 255, 255, 0.04); color: #818cf8; padding: 3px 8px; border-radius: 4px;">{tarjetas_prov_eq2:.2f}</span>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'</div>\n'
+                f'</div>'
             )
-            _stats_h2h_away = _calcular_resumen_bloque(
-                _df_h2h_norm_away,
-                usar_decay=False,
-                media_liga_gf=_comp_ag_mean,
-                media_liga_gc=_comp_hg_mean,
-                df_fallback=_df_h2h_fb_away,
-            )
+            st.markdown(bento_tactico_html, unsafe_allow_html=True)
 
-            col_h2h_lv1, col_h2h_lv2 = st.columns(2)
-            with col_h2h_lv1:
-                st.markdown(f"#### 🏠 Rendimiento en Casa ({_stats_h2h_home['n']} partidos) — {eq1}")
-                if _stats_h2h_home["n"] > 0:
-                    st.dataframe(
-                        _construir_tabla_rendimiento_condicion(_stats_h2h_home, "Métrica Local"),
-                        width="stretch",
-                        hide_index=True,
-                    )
-                else:
-                    st.info(f"Sin registros como local para {eq1}.")
-
-            with col_h2h_lv2:
-                st.markdown(f"#### ✈️ Rendimiento Fuera ({_stats_h2h_away['n']} partidos) — {eq2}")
-                if _stats_h2h_away["n"] > 0:
-                    st.dataframe(
-                        _construir_tabla_rendimiento_condicion(_stats_h2h_away, "Métrica Visitante"),
-                        width="stretch",
-                        hide_index=True,
-                    )
-                else:
-                    st.info(f"Sin registros como visitante para {eq2}.")
-
-            # ── 5. TABLA DE FRECUENCIAS DE MERCADO (CONDICIONADA CASA VS FUERA) ──
+            # ── 5. MATRIZ DE FRECUENCIAS EMPÍRICAS DE MERCADO (8 MERCADOS DE GOLES · FLEXBOX PURO) ──
             st.markdown("---")
-            st.subheader("📈 Matriz de Frecuencias Empíricas de Mercado (Condicionada Casa vs Fuera)")
 
-            _PRIORS_MERCADO_H2H = {"over15": 0.74, "over25": 0.52, "btts": 0.53, "gol_1t": 0.68}
+            _PRIORS_MERCADO_H2H = {"over15": 0.74, "over25": 0.52, "over35": 0.30, "btts": 0.53, "gol_1t": 0.68}
 
             def _frecuencia_cruda_mercado(df_sub: pd.DataFrame, tipo_m: str) -> tuple[float, int]:
                 if df_sub is None or df_sub.empty or "FTHG" not in df_sub.columns or "FTAG" not in df_sub.columns:
                     return _PRIORS_MERCADO_H2H.get(tipo_m, 0.50), 0
-                d_val = df_sub.dropna(subset=["FTHG", "FTAG"]).copy()
+                d_val = df_sub.dropna(subset=("FTHG", "FTAG")).copy()
                 n_m = len(d_val)
                 if n_m == 0:
                     return _PRIORS_MERCADO_H2H.get(tipo_m, 0.50), 0
@@ -8105,11 +8491,13 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
                     return float((tot_g > 1.5).mean()), n_m
                 if tipo_m == "over25":
                     return float((tot_g > 2.5).mean()), n_m
+                if tipo_m == "over35":
+                    return float((tot_g > 3.5).mean()), n_m
                 if tipo_m == "btts":
                     return float(((d_val["FTHG"] > 0) & (d_val["FTAG"] > 0)).mean()), n_m
                 if tipo_m == "gol_1t":
                     if "HTHG" in d_val.columns and "HTAG" in d_val.columns:
-                        d_ht = d_val.dropna(subset=["HTHG", "HTAG"])
+                        d_ht = d_val.dropna(subset=("HTHG", "HTAG"))
                         if not d_ht.empty:
                             return float(((d_ht["HTHG"] + d_ht["HTAG"]) > 0.5).mean()), len(d_ht)
                     return float(np.clip(1.0 - math.exp(-0.44 * float(tot_g.mean() or 2.4)), 0.15, 0.92)), n_m
@@ -8120,100 +8508,252 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
                 f_glb, n_glb = _frecuencia_cruda_mercado(df_glob_eq, tipo_m)
                 prior_m = (0.70 * f_glb + 0.30 * _PRIORS_MERCADO_H2H.get(tipo_m, 0.50)) if n_glb > 0 else _PRIORS_MERCADO_H2H.get(tipo_m, 0.50)
                 if n_emp < 3:
-                    # Suavizado Beta-Binomial (fuerza del prior = 3 partidos equivalentes) para impedir 0.0%
                     f_suav = ((n_emp * f_emp) + (3.0 * prior_m)) / (n_emp + 3.0)
                     return float(np.clip(f_suav, 0.05, 0.95))
                 if n_emp < 6:
                     return float(np.clip(0.75 * f_emp + 0.25 * prior_m, 0.05, 0.95))
                 return float(np.clip(f_emp, 0.02, 0.98))
 
-            filas_frecuencia = []
-            for etiqueta_m, clave_m in [
-                ("⚽ Over 1.5 Goles (+1.5 FT)", "over15"),
-                ("🔥 Over 2.5 Goles (+2.5 FT)", "over25"),
-                ("🎯 Ambos Marcan (BTTS Sí)", "btts"),
-                ("⏱️ Gol en 1º Tiempo (+0.5 HT)", "gol_1t"),
-            ]:
-                f_loc = _frecuencia_mercado_condicionada(df_eq1_all if relajo_local else df_eq1_home, df_eq1_all, clave_m)
-                f_vis = _frecuencia_mercado_condicionada(df_eq2_all if relajo_vis else df_eq2_away, df_eq2_all, clave_m)
-                f_conj = float(np.clip((f_loc + f_vis) / 2.0, 0.01, 0.99))
-                cuota_j_emp = round(1.0 / f_conj, 2)
-                filas_frecuencia.append({
-                    "Mercado Analizado": etiqueta_m,
-                    f"🏠 % Casa ({eq1})": f"{f_loc * 100:.1f}%",
-                    f"✈️ % Fuera ({eq2})": f"{f_vis * 100:.1f}%",
-                    "📊 Frecuencia Conjunta (%)": f"{f_conj * 100:.1f}%",
-                    "💎 Cuota Justa Empírica (1/p)": f"Cuota: {cuota_j_emp:.2f}",
-                })
+            _df_frec_loc = df_eq1_all if relajo_local else df_eq1_home
+            _df_frec_vis = df_eq2_all if relajo_vis else df_eq2_away
 
-            df_frec_tabla = pd.DataFrame(filas_frecuencia)
-            st.dataframe(df_frec_tabla, width="stretch", hide_index=True)
+            _p_o15_loc = _frecuencia_mercado_condicionada(_df_frec_loc, df_eq1_all, "over15")
+            _p_o15_vis = _frecuencia_mercado_condicionada(_df_frec_vis, df_eq2_all, "over15")
+            _p_o25_loc = _frecuencia_mercado_condicionada(_df_frec_loc, df_eq1_all, "over25")
+            _p_o25_vis = _frecuencia_mercado_condicionada(_df_frec_vis, df_eq2_all, "over25")
+            _p_o35_loc = _frecuencia_mercado_condicionada(_df_frec_loc, df_eq1_all, "over35")
+            _p_o35_vis = _frecuencia_mercado_condicionada(_df_frec_vis, df_eq2_all, "over35")
+            _p_btts_loc = _frecuencia_mercado_condicionada(_df_frec_loc, df_eq1_all, "btts")
+            _p_btts_vis = _frecuencia_mercado_condicionada(_df_frec_vis, df_eq2_all, "btts")
+            _p_ht05_loc = _frecuencia_mercado_condicionada(_df_frec_loc, df_eq1_all, "gol_1t")
+            _p_ht05_vis = _frecuencia_mercado_condicionada(_df_frec_vis, df_eq2_all, "gol_1t")
 
-            # ── 5B. MOTOR POISSON DE VOLUMEN (TIROS A PUERTA Y CÓRNERS TOTALES) ──
-            # Extracción bidireccional (Ataque y Defensa cruzados de ambos equipos)
+            _mercados_8_goles = (
+                ("⚽ Over 1.5 Goles (+1.5 FT)", _p_o15_loc, _p_o15_vis),
+                ("🔥 Over 2.5 Goles (+2.5 FT)", _p_o25_loc, _p_o25_vis),
+                ("🚀 Over 3.5 Goles (+3.5 FT)", _p_o35_loc, _p_o35_vis),
+                ("🛡️ Under 1.5 Goles (-1.5 FT)", float(np.clip(1.0 - _p_o15_loc, 0.02, 0.98)), float(np.clip(1.0 - _p_o15_vis, 0.02, 0.98))),
+                ("🧊 Under 2.5 Goles (-2.5 FT)", float(np.clip(1.0 - _p_o25_loc, 0.02, 0.98)), float(np.clip(1.0 - _p_o25_vis, 0.02, 0.98))),
+                ("🔒 Under 3.5 Goles (-3.5 FT)", float(np.clip(1.0 - _p_o35_loc, 0.02, 0.98)), float(np.clip(1.0 - _p_o35_vis, 0.02, 0.98))),
+                ("🎯 Ambos Marcan (BTTS Sí)", _p_btts_loc, _p_btts_vis),
+                ("⏱️ Gol en 1º Tiempo (+0.5 HT)", _p_ht05_loc, _p_ht05_vis),
+            )
+
+            _abrev_eq1_frec = eq1[:3].upper()
+            _abrev_eq2_frec = eq2[:3].upper()
+            filas_frec_flex_html = ""
+            for etiqueta_m, p_loc, p_vis in _mercados_8_goles:
+                frec_conjunta = float(np.clip((p_loc + p_vis) / 2.0, 0.01, 0.99))
+                cuota_justa = round(1.0 / max(0.01, frec_conjunta), 2)
+                if frec_conjunta >= 0.70:
+                    badge_diagnostico = '<span style="background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.35); padding: 3px 9px; border-radius: 999px; font-size: 0.66rem; font-weight: 800; letter-spacing: 0.04em;">ALTA FRECUENCIA</span>'
+                elif frec_conjunta <= 0.35:
+                    badge_diagnostico = '<span style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.35); padding: 3px 9px; border-radius: 999px; font-size: 0.66rem; font-weight: 800; letter-spacing: 0.04em;">BAJA FRECUENCIA</span>'
+                elif abs(p_loc - p_vis) >= 0.40:
+                    badge_diagnostico = '<span style="background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.35); padding: 3px 9px; border-radius: 999px; font-size: 0.66rem; font-weight: 800; letter-spacing: 0.04em;">TENDENCIA ASIMÉTRICA</span>'
+                else:
+                    badge_diagnostico = '<span style="background: rgba(148, 163, 184, 0.14); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.30); padding: 3px 9px; border-radius: 999px; font-size: 0.66rem; font-weight: 800; letter-spacing: 0.04em;">FRECUENCIA MEDIA</span>'
+
+                filas_frec_flex_html += (
+                    f'<div style="display: flex; justify-content: space-between; align-items: center; background: rgba(255, 255, 255, 0.02); margin-bottom: 6px; padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.04);">\n'
+                    f'<div style="flex: 2.1; font-size: 0.80rem; font-weight: 600; color: #f8fafc;">{etiqueta_m}</div>\n'
+                    f'<div style="flex: 0.9; text-align: right; font-family: monospace; font-size: 0.84rem; font-weight: 700;">'
+                    f'<span style="background: rgba(255, 255, 255, 0.04); color: #38bdf8; padding: 3px 8px; border-radius: 4px;">{p_loc * 100.0:.1f}%</span></div>\n'
+                    f'<div style="flex: 0.9; text-align: right; font-family: monospace; font-size: 0.84rem; font-weight: 700;">'
+                    f'<span style="background: rgba(255, 255, 255, 0.04); color: #818cf8; padding: 3px 8px; border-radius: 4px;">{p_vis * 100.0:.1f}%</span></div>\n'
+                    f'<div style="flex: 1.2; text-align: right; font-family: monospace; font-size: 0.85rem; font-weight: 800;">'
+                    f'<span style="background: rgba(56, 189, 248, 0.10); color: #f8fafc; padding: 3px 9px; border-radius: 4px; border: 1px solid rgba(56, 189, 248, 0.22);">{frec_conjunta * 100.0:.1f}%</span></div>\n'
+                    f'<div style="flex: 1.0; text-align: right; font-family: monospace; font-size: 0.85rem; font-weight: 800;">'
+                    f'<span style="background: rgba(16, 185, 129, 0.12); color: #10b981; padding: 3px 8px; border-radius: 4px; border: 1px solid rgba(16, 185, 129, 0.28);">@{cuota_justa:.2f}</span></div>\n'
+                    f'<div style="flex: 1.4; text-align: right;">{badge_diagnostico}</div>\n'
+                    f'</div>\n'
+                )
+
+            bloque_frec_html = (
+                f'<div style="margin-top: 10px; margin-bottom: 22px;">\n'
+                f'<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">\n'
+                f'<div style="display: flex; align-items: center; gap: 8px;">\n'
+                f'<span style="font-size: 1.1rem;">📈</span>\n'
+                f'<span style="font-size: 0.95rem; font-weight: 700; color: #f8fafc; letter-spacing: 0.3px;">Matriz de Frecuencias Empíricas de Mercado (Condicionada Casa vs Fuera)</span>\n'
+                f'</div>\n'
+                f'<span style="font-size: 0.70rem; color: #94a3b8; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">8 Mercados de Goles · Suavizado Bayesiano</span>\n'
+                f'</div>\n'
+                f'<div style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 16px;">\n'
+                f'<div style="display: flex; justify-content: space-between; align-items: center; padding: 4px 12px 10px 12px; margin-bottom: 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); font-size: 0.68rem; color: #94a3b8; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;">\n'
+                f'<div style="flex: 2.1;">MERCADO</div>\n'
+                f'<div style="flex: 0.9; text-align: right; color: #38bdf8;">{_abrev_eq1_frec}</div>\n'
+                f'<div style="flex: 0.9; text-align: right; color: #818cf8;">{_abrev_eq2_frec}</div>\n'
+                f'<div style="flex: 1.2; text-align: right;">FRECUENCIA CONJUNTA</div>\n'
+                f'<div style="flex: 1.0; text-align: right;">CUOTA JUSTA</div>\n'
+                f'<div style="flex: 1.4; text-align: right;">DIAGNÓSTICO</div>\n'
+                f'</div>\n'
+                f'{filas_frec_flex_html}'
+                f'</div>\n'
+                f'</div>'
+            )
+            st.markdown(bloque_frec_html, unsafe_allow_html=True)
+
+            # ── 5B. MOTOR POISSON UNIFICADO (LÍNEAS 4.5 A 12.5) + TOP-5 MARCADORES EXACTOS ──
             _sot_loc_fav = float(_stats_h2h_home.get("sot_f", 4.5))
             _sot_loc_conc = float(_stats_h2h_home.get("sot_c", 3.8))
             _sot_vis_fav = float(_stats_h2h_away.get("sot_f", 4.0))
             _sot_vis_conc = float(_stats_h2h_away.get("sot_c", 4.2))
 
-            # Lambda Total Bidireccional: Peligro Local vs Def Vis + Peligro Vis vs Def Local
-            _lambda_sot_eq1 = (_sot_loc_fav + _sot_vis_conc) / 2.0
-            _lambda_sot_eq2 = (_sot_vis_fav + _sot_loc_conc) / 2.0
-            lambda_sot_h2h = max(0.5, max(1.0, _lambda_sot_eq1 + _lambda_sot_eq2))
+            sot_proy_eq1 = (_sot_loc_fav + _sot_vis_conc) / 2.0
+            sot_proy_eq2 = (_sot_vis_fav + _sot_loc_conc) / 2.0
+            lambda_sot_total = max(0.5, max(1.0, sot_proy_eq1 + sot_proy_eq2))
+            lambda_sot_h2h = lambda_sot_total
 
             _cor_loc_fav = float(_stats_h2h_home.get("corners_f", 5.0))
             _cor_loc_conc = float(_stats_h2h_home.get("corners_c", 4.0))
             _cor_vis_fav = float(_stats_h2h_away.get("corners_f", 4.5))
             _cor_vis_conc = float(_stats_h2h_away.get("corners_c", 4.8))
 
-            _lambda_cor_eq1 = (_cor_loc_fav + _cor_vis_conc) / 2.0
-            _lambda_cor_eq2 = (_cor_vis_fav + _cor_loc_conc) / 2.0
-            lambda_corners_h2h = max(0.5, max(1.0, _lambda_cor_eq1 + _lambda_cor_eq2))
+            corn_proy_eq1 = (_cor_loc_fav + _cor_vis_conc) / 2.0
+            corn_proy_eq2 = (_cor_vis_fav + _cor_loc_conc) / 2.0
+            lambda_corn_total = max(0.5, max(1.0, corn_proy_eq1 + corn_proy_eq2))
+            lambda_corners_h2h = lambda_corn_total
 
-            def _construir_matriz_poisson_volumen(lam_vol: float, lineas_eval: list[float]) -> pd.DataFrame:
-                filas_vol = []
-                for lin_v in lineas_eval:
-                    p_under_v = float(np.clip(prob_poisson_acumulada(lin_v, lam_vol), 1e-4, 0.9999))
-                    p_over_v = float(np.clip(1.0 - p_under_v, 1e-4, 0.9999))
-                    cuota_over_v = 1.0 / p_over_v
-                    cuota_under_v = 1.0 / p_under_v
-                    filas_vol.append({
-                        "Línea": f"{lin_v:.1f}",
-                        "Prob. Over (%)": f"{p_over_v * 100.0:.1f}%",
-                        "Cuota Justa Over": f"{cuota_over_v:.2f}",
-                        "Prob. Under (%)": f"{p_under_v * 100.0:.1f}%",
-                        "Cuota Justa Under": f"{cuota_under_v:.2f}",
-                    })
-                return pd.DataFrame(filas_vol)
+            lambda_goles_eq1 = float(xg_l)
+            lambda_goles_eq2 = float(xg_v)
 
-            col_vol_sot, col_vol_cor = st.columns(2)
-            with col_vol_sot:
-                st.markdown(
-                    f"#### 🎯 Distribución Poisson — Tiros a Puerta Totales (SOT) "
-                    f"`λ = {lambda_sot_h2h:.2f}`"
-                )
-                st.caption(
-                    f"🏠 {eq1} Esp.: **{_lambda_sot_eq1:.2f}** ({_sot_loc_fav:.1f} fav / {_sot_vis_conc:.1f} conc) + "
-                    f"✈️ {eq2} Esp.: **{_lambda_sot_eq2:.2f}** ({_sot_vis_fav:.1f} fav / {_sot_loc_conc:.1f} conc)"
-                )
-                df_poisson_sot = _construir_matriz_poisson_volumen(
-                    lambda_sot_h2h, [6.5, 7.5, 8.5, 9.5, 10.5]
-                )
-                st.dataframe(df_poisson_sot, width="stretch", hide_index=True)
+            # FILA 1: CONTROLES Y METADATOS SUPERIORES NIVELADOS
+            col_ctrl_izq, col_ctrl_der = st.columns((0.52, 0.48), gap="medium")
 
-            with col_vol_cor:
-                st.markdown(
-                    f"#### 🚩 Distribución Poisson — Córners Totales "
-                    f"`λ = {lambda_corners_h2h:.2f}`"
+            with col_ctrl_izq:
+                selector_prop = st.radio(
+                    "Métrica Poisson",
+                    options=("Tiros a Puerta", "Saques de Esquina"),
+                    index=0,
+                    horizontal=True,
+                    label_visibility="collapsed",
+                    key="radio_poisson_unificado",
                 )
-                st.caption(
-                    f"🏠 {eq1} Esp.: **{_lambda_cor_eq1:.2f}** ({_cor_loc_fav:.1f} fav / {_cor_vis_conc:.1f} conc) + "
-                    f"✈️ {eq2} Esp.: **{_lambda_cor_eq2:.2f}** ({_cor_vis_fav:.1f} fav / {_cor_loc_conc:.1f} conc)"
+
+            with col_ctrl_der:
+                html_ctrl_der = (
+                    f'<div style="display: flex; justify-content: flex-end; align-items: center; height: 38px;">\n'
+                    f'<span style="font-size: 0.72rem; color: #94a3b8; background: rgba(15, 23, 42, 0.6); padding: 5px 12px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.08);">\n'
+                    f'Goles Esperados: <strong style="color: #38bdf8;">{eq1[:3].upper()} {lambda_goles_eq1:.2f}</strong> — <strong style="color: #818cf8;">{lambda_goles_eq2:.2f} {eq2[:3].upper()}</strong>\n'
+                    f'</span>\n'
+                    f'</div>'
                 )
-                df_poisson_corners = _construir_matriz_poisson_volumen(
-                    lambda_corners_h2h, [7.5, 8.5, 9.5, 10.5, 11.5]
+                st.markdown(html_ctrl_der, unsafe_allow_html=True)
+
+            # FILA 2: TARJETAS NIVELADAS EN PARALELO
+            col_card_izq, col_card_der = st.columns((0.52, 0.48), gap="medium")
+
+            with col_card_izq:
+                if selector_prop == "Tiros a Puerta":
+                    lambda_val = lambda_sot_total
+                    subtitulo = f"{eq1} Esp: {sot_proy_eq1:.1f} + {eq2} Esp: {sot_proy_eq2:.1f}"
+                    titulo_poisson = "🎯 Distribución Poisson · Tiros a Puerta"
+                else:
+                    lambda_val = lambda_corn_total
+                    subtitulo = f"{eq1} Esp: {corn_proy_eq1:.1f} + {eq2} Esp: {corn_proy_eq2:.1f}"
+                    titulo_poisson = "🚩 Distribución Poisson · Saques de Esquina"
+
+                lineas_poisson_eval = (4.5, 5.5, 6.5, 7.5, 8.5, 9.5, 10.5, 11.5, 12.5)
+                datos_lineas_poisson = []
+                for lin_p in lineas_poisson_eval:
+                    prob_under = float(np.clip(prob_poisson_acumulada(math.floor(lin_p), lambda_val), 0.001, 0.999))
+                    prob_over = float(np.clip(1.0 - prob_under, 0.001, 0.999))
+                    cuota_over = 1.0 / max(0.001, prob_over)
+                    cuota_under = 1.0 / max(0.001, prob_under)
+                    datos_lineas_poisson.append((lin_p, prob_over, cuota_over, prob_under, cuota_under))
+
+                linea_equilibrada_p = min(datos_lineas_poisson, key=lambda item_p: abs(item_p[1] - 0.50))[0]
+
+                tiras_poisson_html = ""
+                for lin_p, prob_over, cuota_over, prob_under, cuota_under in datos_lineas_poisson:
+                    es_linea_base = abs(lin_p - linea_equilibrada_p) < 1e-4
+                    if es_linea_base:
+                        estilo_tira = "background: rgba(56, 189, 248, 0.10); border: 1px solid rgba(56, 189, 248, 0.40); margin-bottom: 6px; padding: 7px 12px; border-radius: 6px;"
+                        badge_base = '<span style="font-size: 0.60rem; font-weight: 800; color: #38bdf8; background: rgba(56, 189, 248, 0.18); border: 1px solid rgba(56, 189, 248, 0.40); padding: 2px 6px; border-radius: 4px; margin-left: 6px;">LÍNEA BASE</span>'
+                        color_lbl_lin = "#f8fafc"
+                    else:
+                        estilo_tira = "background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.04); margin-bottom: 6px; padding: 7px 12px; border-radius: 6px;"
+                        badge_base = ""
+                        color_lbl_lin = "#cbd5e1"
+
+                    tiras_poisson_html += (
+                        f'<div style="display: flex; justify-content: space-between; align-items: center; {estilo_tira}">\n'
+                        f'<div style="display: flex; align-items: center; font-family: monospace; font-size: 0.80rem; font-weight: 700; color: {color_lbl_lin};">'
+                        f'<span>Línea {lin_p:.1f}</span>{badge_base}</div>\n'
+                        f'<div style="display: flex; align-items: center; gap: 8px; font-family: monospace; font-size: 0.78rem; font-weight: 700;">\n'
+                        f'<span style="background: rgba(16, 185, 129, 0.12); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.28); padding: 3px 8px; border-radius: 4px;">Over: {prob_over * 100.0:.1f}% (@{cuota_over:.2f})</span>\n'
+                        f'<span style="background: rgba(168, 85, 247, 0.12); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.28); padding: 3px 8px; border-radius: 4px;">Under: {prob_under * 100.0:.1f}% (@{cuota_under:.2f})</span>\n'
+                        f'</div>\n'
+                        f'</div>\n'
+                    )
+
+                tarjeta_poisson_html = (
+                    f'<div style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(56, 189, 248, 0.22); border-radius: 10px; padding: 16px; margin-top: 0;">\n'
+                    f'<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">\n'
+                    f'<span style="font-size: 0.82rem; font-weight: 700; color: #38bdf8; letter-spacing: 0.4px; text-transform: uppercase;">{titulo_poisson}</span>\n'
+                    f'<span style="font-family: monospace; font-size: 0.78rem; font-weight: 800; color: #f8fafc; background: rgba(56, 189, 248, 0.14); border: 1px solid rgba(56, 189, 248, 0.35); padding: 2px 8px; border-radius: 4px;">λ = {lambda_val:.2f}</span>\n'
+                    f'</div>\n'
+                    f'<div style="font-size: 0.72rem; color: #94a3b8; font-family: monospace; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.06);">{subtitulo}</div>\n'
+                    f'{tiras_poisson_html}'
+                    f'</div>'
                 )
-                st.dataframe(df_poisson_corners, width="stretch", hide_index=True)
+                st.markdown(tarjeta_poisson_html, unsafe_allow_html=True)
+
+            with col_card_der:
+                lista_biv_marcadores = []
+                suma_biv_06 = 0.0
+                for i_g in range(7):
+                    for j_g in range(7):
+                        p_ij = calcular_probabilidad_poisson(lambda_goles_eq1, i_g) * calcular_probabilidad_poisson(lambda_goles_eq2, j_g)
+                        suma_biv_06 += p_ij
+                        lista_biv_marcadores.append((f"{i_g} - {j_g}", p_ij))
+
+                norm_biv = suma_biv_06 if suma_biv_06 > 0 else 1.0
+                lista_biv_norm = sorted(
+                    ((marc_s, p_raw / norm_biv) for marc_s, p_raw in lista_biv_marcadores),
+                    key=lambda x_m: x_m[1],
+                    reverse=True,
+                )
+                top5_marcadores_exactos = lista_biv_norm[:5]
+                prob_acumulada_top5 = sum(p_m for _, p_m in top5_marcadores_exactos) * 100.0
+                max_p_top5 = max((p_m for _, p_m in top5_marcadores_exactos), default=0.15)
+
+                filas_top5_html = ""
+                for idx_m, (marc_txt, prob_m) in enumerate(top5_marcadores_exactos, start=1):
+                    pct_m = prob_m * 100.0
+                    cuota_m = 1.0 / max(0.001, prob_m)
+                    ancho_barra = float(np.clip((prob_m / max(0.01, max_p_top5)) * 100.0, 12.0, 100.0))
+                    filas_top5_html += (
+                        f'<div style="display: flex; justify-content: space-between; align-items: center; background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.05); margin-bottom: 8px; padding: 10px 12px; border-radius: 6px;">\n'
+                        f'<div style="display: flex; align-items: center; gap: 10px; min-width: 96px;">\n'
+                        f'<span style="font-family: monospace; font-size: 0.70rem; color: #64748b; font-weight: 700;">#{idx_m}</span>\n'
+                        f'<span style="font-family: monospace; font-size: 0.92rem; font-weight: 800; color: #f8fafc; background: rgba(255, 255, 255, 0.05); padding: 4px 10px; border-radius: 5px; border: 1px solid rgba(255, 255, 255, 0.08);">{marc_txt}</span>\n'
+                        f'</div>\n'
+                        f'<div style="flex: 1; margin: 0 14px; height: 6px; border-radius: 999px; background: rgba(255, 255, 255, 0.06); overflow: hidden;">\n'
+                        f'<div style="width: {ancho_barra:.1f}%; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #38bdf8, #818cf8);"></div>\n'
+                        f'</div>\n'
+                        f'<div style="display: flex; align-items: center; gap: 10px; font-family: monospace;">\n'
+                        f'<span style="font-size: 0.84rem; font-weight: 700; color: #38bdf8;">{pct_m:.1f}%</span>\n'
+                        f'<span style="background: rgba(16, 185, 129, 0.12); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.28); padding: 3px 8px; border-radius: 4px; font-size: 0.82rem; font-weight: 800;">@{cuota_m:.2f}</span>\n'
+                        f'</div>\n'
+                        f'</div>\n'
+                    )
+
+                tarjeta_top5_html = (
+                    f'<div style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(129, 140, 248, 0.25); border-radius: 10px; padding: 16px; margin-top: 0;">\n'
+                    f'<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">\n'
+                    f'<span style="font-size: 0.82rem; font-weight: 700; color: #818cf8; letter-spacing: 0.4px; text-transform: uppercase;">🎯 Top 5 Marcadores Más Probables</span>\n'
+                    f'<span style="font-family: monospace; font-size: 0.78rem; font-weight: 800; color: #f8fafc; background: rgba(129, 140, 248, 0.14); border: 1px solid rgba(129, 140, 248, 0.35); padding: 2px 8px; border-radius: 4px;">Malla Bivariante</span>\n'
+                    f'</div>\n'
+                    f'<div style="font-size: 0.72rem; color: #94a3b8; font-family: monospace; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.06);">Modelo Poisson Bivariante de Goles</div>\n'
+                    f'{filas_top5_html}'
+                    f'<div style="margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.06); display: flex; justify-content: space-between; align-items: center; font-size: 0.74rem; color: #94a3b8;">\n'
+                    f'<span>Cobertura Acumulada Top-5: <strong style="color: #10b981; font-family: monospace;">{prob_acumulada_top5:.1f}%</strong> de los escenarios.</span>\n'
+                    f'<span style="font-family: monospace; font-size: 0.68rem; color: #64748b;">Malla 7×7 Normalizada</span>\n'
+                    f'</div>\n'
+                    f'</div>'
+                )
+                st.markdown(tarjeta_top5_html, unsafe_allow_html=True)
 
             # ── 6. HISTÓRICO H2H DIRECTO (TODAS LAS TEMPORADAS) Y FORMA RECIENTE ──
             st.markdown("---")
@@ -8276,220 +8816,212 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
                 df_sql_h2h["_dt_orden"] = pd.to_datetime(df_sql_h2h["Date"], errors="coerce", dayfirst=True)
                 df_sql_h2h = df_sql_h2h.sort_values(by="_dt_orden", ascending=False)
 
-            # 6a) Enfrentamientos Directos H2H (Últimos 5 en todas las temporadas/competiciones)
-            st.markdown(f"#### ⚔️ Enfrentamientos Directos H2H (Últimos 5 registrados entre {eq1} y {eq2})")
+            # ── 6. HISTORIAL DIRECTO, RACHA RECIENTE Y RADAR +EV (DUAL ENGINE) ──
+            def _extraer_ultimos_partidos_equipo(df_fuente: pd.DataFrame, equipo_obj: str, n_max: int = 4) -> list:
+                eq_norm_low = str(equipo_obj).strip().lower()
+                fuente = df_fuente if (df_fuente is not None and not df_fuente.empty) else df_partidos_global
+                if fuente is None or fuente.empty:
+                    return []
+                mask = (
+                    (fuente["HomeTeam"].astype(str).str.strip().str.lower() == eq_norm_low)
+                    | (fuente["AwayTeam"].astype(str).str.strip().str.lower() == eq_norm_low)
+                )
+                sub = fuente[mask].dropna(subset=["FTHG", "FTAG"]).copy()
+                if sub.empty:
+                    return []
+                if "_dt_orden" not in sub.columns and "Date" in sub.columns:
+                    sub["_dt_orden"] = pd.to_datetime(sub["Date"], errors="coerce", dayfirst=True)
+                if "_dt_orden" in sub.columns:
+                    sub = sub.sort_values(by="_dt_orden", ascending=False)
+                sub = sub.head(n_max)
+                partidos_res = []
+                for _, r in sub.iterrows():
+                    es_casa = str(r.get("HomeTeam", "")).strip().lower() == eq_norm_low
+                    rival = str(r.get("AwayTeam", "")) if es_casa else str(r.get("HomeTeam", ""))
+                    hg = int(pd.to_numeric(r.get("FTHG", 0), errors="coerce") or 0)
+                    ag = int(pd.to_numeric(r.get("FTAG", 0), errors="coerce") or 0)
+                    gf = hg if es_casa else ag
+                    gc = ag if es_casa else hg
+                    if gf > gc:
+                        res_tipo, res_bg, res_bd, res_cl = "V", "rgba(16, 185, 129, 0.20)", "#10b981", "#34d399"
+                    elif gf == gc:
+                        res_tipo, res_bg, res_bd, res_cl = "E", "rgba(245, 158, 11, 0.20)", "#f59e0b", "#fbbf24"
+                    else:
+                        res_tipo, res_bg, res_bd, res_cl = "D", "rgba(239, 68, 68, 0.20)", "#ef4444", "#f87171"
+                    comp_str = str(r.get("Liga_Origen") or r.get("Div") or r.get("liga") or "Liga").strip()
+                    comp_etq = MAPA_LIGAS.get(comp_str, comp_str)
+                    fecha_str = str(r.get("Date", r.get("fecha", "N/A"))).strip()
+                    cond_str = "Casa" if es_casa else "Fuera"
+                    partidos_res.append({
+                        "fecha": fecha_str,
+                        "torneo": comp_etq,
+                        "rival": rival,
+                        "marcador": f"{hg} - {ag}",
+                        "res_tipo": res_tipo,
+                        "res_bg": res_bg,
+                        "res_bd": res_bd,
+                        "res_cl": res_cl,
+                        "condicion": cond_str,
+                    })
+                return partidos_res
+
+            def _generar_html_tiras_forma(partidos: list, equipo_nombre: str) -> str:
+                if not partidos:
+                    return f'<div style="color: #94a3b8; font-size: 0.78rem; font-style: italic; margin-bottom: 8px;">Sin registros recientes para {equipo_nombre}.</div>'
+                html_tiras = ""
+                for p in partidos:
+                    html_tiras += (
+                        f'<div style="display: flex; justify-content: space-between; align-items: center; background: rgba(255, 255, 255, 0.02); margin-bottom: 5px; padding: 6px 10px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.05);">'
+                        f'<div style="display: flex; align-items: center; gap: 8px;">'
+                        f'<span style="background: {p["res_bg"]}; border: 1px solid {p["res_bd"]}; color: {p["res_cl"]}; font-size: 0.68rem; font-weight: 800; width: 20px; height: 20px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center;">{p["res_tipo"]}</span>'
+                        f'<span style="font-family: monospace; font-size: 0.80rem; font-weight: 700; color: #f8fafc; background: rgba(255, 255, 255, 0.05); padding: 2px 6px; border-radius: 4px;">{p["marcador"]}</span>'
+                        f'<span style="font-size: 0.78rem; font-weight: 600; color: #cbd5e1;">vs {p["rival"]}</span>'
+                        f'<span style="font-size: 0.68rem; color: #94a3b8;">· {p["condicion"]}</span>'
+                        f'</div>'
+                        f'<div style="display: flex; align-items: center; gap: 6px;">'
+                        f'<span style="font-size: 0.68rem; color: #94a3b8;">{p["fecha"]}</span>'
+                        f'<span style="font-size: 0.65rem; color: #64748b; background: rgba(255, 255, 255, 0.03); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.05);">{p["torneo"]}</span>'
+                        f'</div>'
+                        f'</div>'
+                    )
+                return html_tiras
+
+            # Construcción de enfrentamientos directos H2H
+            html_h2h_dir = ""
             if not h2h_directo_df.empty:
-                filas_h2h_dir = []
-                for _, r_h in h2h_directo_df.iterrows():
+                for _, r_h in h2h_directo_df.head(4).iterrows():
                     hg_i = int(pd.to_numeric(r_h.get("FTHG", 0), errors="coerce") or 0)
                     ag_i = int(pd.to_numeric(r_h.get("FTAG", 0), errors="coerce") or 0)
-                    ref_val = str(r_h.get("Referee", "") or "").strip()
-                    if not ref_val or ref_val.lower() == "nan":
-                        ref_val = "No registrado"
-                    comp_h = str(
-                        r_h.get("Liga_Origen")
-                        or r_h.get("Div")
-                        or r_h.get("liga")
-                        or "N/A"
-                    ).strip()
+                    loc_i = str(r_h.get("HomeTeam", r_h.get("equipo_local", ""))).strip()
+                    vis_i = str(r_h.get("AwayTeam", r_h.get("equipo_visitante", ""))).strip()
+                    comp_h = str(r_h.get("Liga_Origen") or r_h.get("Div") or r_h.get("liga") or "Liga").strip()
                     comp_h_etq = MAPA_LIGAS.get(comp_h, comp_h)
-                    filas_h2h_dir.append({
-                        "📅 Fecha": str(r_h.get("Date", r_h.get("fecha", "N/A"))),
-                        "🏆 Competición": comp_h_etq,
-                        "🏠 Local": str(r_h.get("HomeTeam", r_h.get("equipo_local", ""))),
-                        "⚽ Marcador": f"{hg_i} - {ag_i}",
-                        "✈️ Visitante": str(r_h.get("AwayTeam", r_h.get("equipo_visitante", ""))),
-                        "⚖️ Árbitro": ref_val,
-                    })
-                st.dataframe(pd.DataFrame(filas_h2h_dir), width="stretch", hide_index=True)
-            else:
-                st.info("No se registran enfrentamientos directos recientes entre ambos equipos en macro_base_futbol.db.")
-
-                def _calcular_ritmo_reciente_5_oficiales(equipo_consulta: str, stats_fb: dict) -> dict:
-                    df_u5 = pd.DataFrame()
-                    if RUTA_BD.exists():
-                        try:
-                            with sqlite3.connect(RUTA_BD) as conn_u5:
-                                q_u5_sql = """
-                                    SELECT fecha, torneo, equipo_local, equipo_visitante, goles_local, goles_visitante, 
-                                           sot_local, sot_visitante, corners_local, corners_visitante
-                                    FROM partidos 
-                                    WHERE (equipo_local = ? OR equipo_visitante = ?) 
-                                      AND goles_local IS NOT NULL
-                                    ORDER BY fecha DESC LIMIT 5
-                                """
-                                df_u5 = pd.read_sql(q_u5_sql, conn_u5, params=(equipo_consulta, equipo_consulta))
-                                # Ordenación cronológica estricta sobre el historial completo si hay más de 5 registros con formato DD/MM/YYYY
-                                q_u5_full = """
-                                    SELECT fecha, torneo, equipo_local, equipo_visitante, goles_local, goles_visitante, 
-                                           sot_local, sot_visitante, corners_local, corners_visitante
-                                    FROM partidos 
-                                    WHERE (equipo_local = ? OR equipo_visitante = ?) 
-                                      AND goles_local IS NOT NULL
-                                """
-                                df_u5_all = pd.read_sql(q_u5_full, conn_u5, params=(equipo_consulta, equipo_consulta))
-                                if not df_u5_all.empty:
-                                    df_u5_all["_dt"] = pd.to_datetime(df_u5_all["fecha"], errors="coerce", dayfirst=True)
-                                    df_u5 = df_u5_all.sort_values(by="_dt", ascending=False).head(5).copy()
-                        except Exception:
-                            df_u5 = pd.DataFrame()
-
-                    if df_u5.empty and not df_partidos_global.empty:
-                        eq_low = str(equipo_consulta).strip().lower()
-                        sub_mem = df_partidos_global[
-                            (df_partidos_global["HomeTeam"].astype(str).str.strip().str.lower() == eq_low)
-                            | (df_partidos_global["AwayTeam"].astype(str).str.strip().str.lower() == eq_low)
-                        ].dropna(subset=["FTHG", "FTAG"]).copy()
-                        if not sub_mem.empty:
-                            if "Date" in sub_mem.columns:
-                                sub_mem["_dt"] = pd.to_datetime(sub_mem["Date"], errors="coerce", dayfirst=True)
-                                sub_mem = sub_mem.sort_values(by="_dt", ascending=False)
-                            sub_mem = sub_mem.head(5)
-                            df_u5 = pd.DataFrame({
-                                "fecha": sub_mem.get("Date"),
-                                "torneo": sub_mem.get("Liga_Origen", sub_mem.get("Div", "Liga")),
-                                "equipo_local": sub_mem.get("HomeTeam"),
-                                "equipo_visitante": sub_mem.get("AwayTeam"),
-                                "goles_local": sub_mem.get("FTHG"),
-                                "goles_visitante": sub_mem.get("FTAG"),
-                                "sot_local": sub_mem.get("HST"),
-                                "sot_visitante": sub_mem.get("AST"),
-                                "corners_local": sub_mem.get("HC"),
-                                "corners_visitante": sub_mem.get("AC"),
-                            })
-
-                    if df_u5.empty:
-                        return {
-                            "n": 0,
-                            "gf_med": float(stats_fb.get("gf_med", 1.35)),
-                            "gc_med": float(stats_fb.get("gc_med", 1.15)),
-                            "sot_f_med": float(stats_fb.get("sot_f", 4.2)),
-                            "sot_c_med": float(stats_fb.get("sot_c", 3.9)),
-                            "cor_f_med": float(stats_fb.get("corners_f", 5.0)),
-                            "cor_c_med": float(stats_fb.get("corners_c", 4.5)),
-                        }
-
-                    eq_clean = str(equipo_consulta).strip().lower()
-                    es_loc = df_u5["equipo_local"].astype(str).str.strip().str.lower() == eq_clean
-                    gf_s = pd.Series(np.where(es_loc, pd.to_numeric(df_u5["goles_local"], errors="coerce"), pd.to_numeric(df_u5["goles_visitante"], errors="coerce"))).dropna()
-                    gc_s = pd.Series(np.where(es_loc, pd.to_numeric(df_u5["goles_visitante"], errors="coerce"), pd.to_numeric(df_u5["goles_local"], errors="coerce"))).dropna()
-                    sot_f_s = pd.Series(np.where(es_loc, pd.to_numeric(df_u5["sot_local"], errors="coerce"), pd.to_numeric(df_u5["sot_visitante"], errors="coerce"))).dropna()
-                    sot_c_s = pd.Series(np.where(es_loc, pd.to_numeric(df_u5["sot_visitante"], errors="coerce"), pd.to_numeric(df_u5["sot_local"], errors="coerce"))).dropna()
-                    cor_f_s = pd.Series(np.where(es_loc, pd.to_numeric(df_u5["corners_local"], errors="coerce"), pd.to_numeric(df_u5["corners_visitante"], errors="coerce"))).dropna()
-                    cor_c_s = pd.Series(np.where(es_loc, pd.to_numeric(df_u5["corners_visitante"], errors="coerce"), pd.to_numeric(df_u5["corners_local"], errors="coerce"))).dropna()
-
-                    return {
-                        "n": int(len(df_u5)),
-                        "gf_med": float(gf_s.mean()) if not gf_s.empty else float(stats_fb.get("gf_med", 1.35)),
-                        "gc_med": float(gc_s.mean()) if not gc_s.empty else float(stats_fb.get("gc_med", 1.15)),
-                        "sot_f_med": float(sot_f_s.mean()) if not sot_f_s.empty else float(stats_fb.get("sot_f", 4.2)),
-                        "sot_c_med": float(sot_c_s.mean()) if not sot_c_s.empty else float(stats_fb.get("sot_c", 3.9)),
-                        "cor_f_med": float(cor_f_s.mean()) if not cor_f_s.empty else float(stats_fb.get("corners_f", 5.0)),
-                        "cor_c_med": float(cor_c_s.mean()) if not cor_c_s.empty else float(stats_fb.get("corners_c", 4.5)),
-                    }
-
-                with st.container(border=True):
-                    st.markdown("##### 📊 Ritmo Táctico y Rendimiento Reciente Cruzado (Últimos 5 Partidos Oficiales)")
-                    _ritmo_loc = _calcular_ritmo_reciente_5_oficiales(eq1, _stats_h2h_home)
-                    _ritmo_vis = _calcular_ritmo_reciente_5_oficiales(eq2, _stats_h2h_away)
-                    _sot_comb_proy = _ritmo_loc["sot_f_med"] + _ritmo_vis["sot_f_med"]
-
-                    if _sot_comb_proy > 10.0:
-                        _badge_ritmo_txt = "⚡ Partido de Alto Ritmo Ofensivo"
-                        _badge_ritmo_bg = "rgba(16, 185, 129, 0.16)"
-                        _badge_ritmo_bd = "#10B981"
-                        _badge_ritmo_cl = "#6EE7B7"
+                    fecha_h = str(r_h.get("Date", r_h.get("fecha", "N/A"))).strip()
+                    if hg_i > ag_i:
+                        badge_h_txt = f"Victoria {loc_i[:3].upper()}"
+                        badge_h_bg, badge_h_bd, badge_h_cl = "rgba(16, 185, 129, 0.15)", "#10b981", "#34d399"
+                    elif ag_i > hg_i:
+                        badge_h_txt = f"Victoria {vis_i[:3].upper()}"
+                        badge_h_bg, badge_h_bd, badge_h_cl = "rgba(56, 189, 248, 0.15)", "#38bdf8", "#7dd3fc"
                     else:
-                        _badge_ritmo_txt = "🛡️ Duelo Táctico / Bajo Ritmo de Disparos"
-                        _badge_ritmo_bg = "rgba(56, 189, 248, 0.14)"
-                        _badge_ritmo_bd = "#38BDF8"
-                        _badge_ritmo_cl = "#7DD3FC"
+                        badge_h_txt = "Empate"
+                        badge_h_bg, badge_h_bd, badge_h_cl = "rgba(245, 158, 11, 0.15)", "#f59e0b", "#fbbf24"
 
-                    st.markdown(
-                        f"<div style='background:{_badge_ritmo_bg};border:1.5px solid {_badge_ritmo_bd};"
-                        f"border-radius:8px;padding:10px 14px;margin-bottom:12px;display:flex;"
-                        f"justify-content:space-between;align-items:center;'>"
-                        f"<span style='font-weight:800;font-size:14px;color:{_badge_ritmo_cl};'>{_badge_ritmo_txt}</span>"
-                        f"<span style='font-size:12.5px;color:#E2E8F0;'>SOT Medio Combinado Proyectado: "
-                        f"<b>{_sot_comb_proy:.2f} tiros a puerta/90m</b></span>"
-                        f"</div>",
-                        unsafe_allow_html=True,
+                    html_h2h_dir += (
+                        f'<div style="display: flex; justify-content: space-between; align-items: center; background: rgba(255, 255, 255, 0.02); margin-bottom: 5px; padding: 7px 10px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.05);">'
+                        f'<div>'
+                        f'<div style="font-size: 0.68rem; color: #94a3b8; font-weight: 600;">{fecha_h} · {comp_h_etq}</div>'
+                        f'<div style="font-size: 0.80rem; font-weight: 700; color: #f8fafc;">{loc_i} vs {vis_i}</div>'
+                        f'</div>'
+                        f'<div style="display: flex; align-items: center; gap: 8px;">'
+                        f'<span style="font-family: monospace; font-size: 0.88rem; font-weight: 800; color: #38bdf8; background: rgba(56, 189, 248, 0.10); padding: 2px 7px; border-radius: 4px; border: 1px solid rgba(56, 189, 248, 0.20);">{hg_i} - {ag_i}</span>'
+                        f'<span style="font-size: 0.66rem; font-weight: 700; padding: 3px 8px; border-radius: 4px; background: {badge_h_bg}; border: 1px solid {badge_h_bd}; color: {badge_h_cl};">{badge_h_txt}</span>'
+                        f'</div>'
+                        f'</div>'
                     )
+            else:
+                html_h2h_dir = (
+                    '<div style="background: rgba(15, 23, 42, 0.5); border: 1px dashed rgba(148, 163, 184, 0.20); border-radius: 8px; padding: 12px 14px; text-align: center; color: #94a3b8; font-size: 0.78rem;">'
+                    'Sin enfrentamientos directos previos registrados en la base de datos oficial.'
+                    '</div>'
+                )
 
-                    _c_rit1, _c_rit2 = st.columns(2)
-                    with _c_rit1:
-                        st.markdown(
-                            f"<div style='background:#16192b;border:1px solid #2d3748;border-radius:10px;padding:14px;'>"
-                            f"<div style='font-size:14px;font-weight:800;color:#10B981;margin-bottom:8px;'>"
-                            f"🏠 Equipo Local: {eq1} (Últ. {_ritmo_loc['n']} Partidos Oficiales)</div>"
-                            f"<div style='font-size:13px;color:#E2E8F0;line-height:1.7;'>"
-                            f"⚽ <b>Goles (Anotados / Encajados):</b> {_ritmo_loc['gf_med']:.2f} / {_ritmo_loc['gc_med']:.2f}<br>"
-                            f"🎯 <b>SOT (A Favor / En Contra):</b> {_ritmo_loc['sot_f_med']:.2f} / {_ritmo_loc['sot_c_med']:.2f}<br>"
-                            f"🚩 <b>Córners (A Favor / En Contra):</b> {_ritmo_loc['cor_f_med']:.2f} / {_ritmo_loc['cor_c_med']:.2f}"
-                            f"</div></div>",
-                            unsafe_allow_html=True,
-                        )
-                    with _c_rit2:
-                        st.markdown(
-                            f"<div style='background:#16192b;border:1px solid #2d3748;border-radius:10px;padding:14px;'>"
-                            f"<div style='font-size:14px;font-weight:800;color:#38BDF8;margin-bottom:8px;'>"
-                            f"✈️ Equipo Visitante: {eq2} (Últ. {_ritmo_vis['n']} Partidos Oficiales)</div>"
-                            f"<div style='font-size:13px;color:#E2E8F0;line-height:1.7;'>"
-                            f"⚽ <b>Goles (Anotados / Encajados):</b> {_ritmo_vis['gf_med']:.2f} / {_ritmo_vis['gc_med']:.2f}<br>"
-                            f"🎯 <b>SOT (A Favor / En Contra):</b> {_ritmo_vis['sot_f_med']:.2f} / {_ritmo_vis['sot_c_med']:.2f}<br>"
-                            f"🚩 <b>Córners (A Favor / En Contra):</b> {_ritmo_vis['cor_f_med']:.2f} / {_ritmo_vis['cor_c_med']:.2f}"
-                            f"</div></div>",
-                            unsafe_allow_html=True,
-                        )
+            u3_loc = _extraer_ultimos_partidos_equipo(df_sql_h2h, eq1, 3)
+            u3_vis = _extraer_ultimos_partidos_equipo(df_sql_h2h, eq2, 3)
+            html_tiras_loc = _generar_html_tiras_forma(u3_loc, eq1)
+            html_tiras_vis = _generar_html_tiras_forma(u3_vis, eq2)
 
-            # 6b & 6c) Forma Reciente en Liga - Últimos 3 partidos de cada equipo
-            def _construir_tabla_ultimos_3(df_fuente: pd.DataFrame, equipo_obj: str) -> pd.DataFrame:
-                eq_norm_low = str(equipo_obj).strip().lower()
-                sub_eq = df_fuente[
-                    (df_fuente["HomeTeam"].astype(str).str.strip().str.lower() == eq_norm_low)
-                    | (df_fuente["AwayTeam"].astype(str).str.strip().str.lower() == eq_norm_low)
-                ].dropna(subset=["FTHG", "FTAG"]).head(3)
-                filas_u3 = []
-                for _, r_u in sub_eq.iterrows():
-                    es_casa = str(r_u.get("HomeTeam", "")).strip().lower() == eq_norm_low
-                    rival = str(r_u.get("AwayTeam", "")) if es_casa else str(r_u.get("HomeTeam", ""))
-                    hg_u = int(pd.to_numeric(r_u.get("FTHG", 0), errors="coerce") or 0)
-                    ag_u = int(pd.to_numeric(r_u.get("FTAG", 0), errors="coerce") or 0)
-                    gf_u = hg_u if es_casa else ag_u
-                    gc_u = ag_u if es_casa else hg_u
-                    res_icono = "✅ V" if gf_u > gc_u else ("➖ E" if gf_u == gc_u else "❌ D")
-                    comp_u = str(
-                        r_u.get("Liga_Origen")
-                        or r_u.get("Div")
-                        or r_u.get("liga")
-                        or "Liga"
-                    ).strip()
-                    comp_u_etq = MAPA_LIGAS.get(comp_u, comp_u)
-                    filas_u3.append({
-                        "📅 Fecha": str(r_u.get("Date", "N/A")),
-                        "🏆 Torneo": comp_u_etq,
-                        "🆚 Rival": rival,
-                        "⚽ Marcador": f"{hg_u} - {ag_u} ({res_icono})",
-                        "🏟️ Condición": "Casa (Local) 🏠" if es_casa else "Fuera (Visitante) ✈️",
-                    })
-                return pd.DataFrame(filas_u3)
+            # Construcción de la columna derecha: Radar de Ineficiencias (+EV Arbitraje)
+            _mercados_radar = [
+                ("🔥 Over 2.5 Goles", float(np.clip((_p_o25_loc + _p_o25_vis) / 2.0, 0.01, 0.99)), float(p_o25)),
+                ("🎯 Ambos Marcan (BTTS Sí)", float(np.clip((_p_btts_loc + _p_btts_vis) / 2.0, 0.01, 0.99)), float(p_btts_si)),
+                ("⚽ Over 1.5 Goles", float(np.clip((_p_o15_loc + _p_o15_vis) / 2.0, 0.01, 0.99)), float(max(prob_o15 / norm, 1e-4))),
+                ("⏱️ Gol en 1º Tiempo", float(np.clip((_p_ht05_loc + _p_ht05_vis) / 2.0, 0.01, 0.99)), float(np.clip(1.0 - math.exp(-0.44 * (xg_l + xg_v)), 0.05, 0.98))),
+            ]
 
-            col_f_loc, col_f_vis = st.columns(2)
-            with col_f_loc:
-                st.markdown(f"#### 🏠 Forma Reciente en Liga — Últimos 3 de {eq1}")
-                df_u3_loc = _construir_tabla_ultimos_3(df_sql_h2h, eq1)
-                if not df_u3_loc.empty:
-                    st.dataframe(df_u3_loc, width="stretch", hide_index=True)
+            html_radar_items = ""
+            for nombre_m, frec_emp, prob_poi in _mercados_radar:
+                delta = frec_emp - prob_poi
+                cuota_emp = 1.0 / max(frec_emp, 0.01)
+                cuota_poi = 1.0 / max(prob_poi, 0.01)
+
+                if delta >= 0.12:
+                    badge_txt = "DISCREPANCIA FAVORABLE (+EV)"
+                    badge_bg, badge_bd, badge_cl = "rgba(16, 185, 129, 0.15)", "#10b981", "#34d399"
+                    diag_txt = f"Frecuencia empírica notablemente superior al modelo teórico (+{delta*100.0:.1f}%). Posible ineficiencia explotable en bookmakers."
+                elif frec_emp >= 0.65 and prob_poi >= 0.65:
+                    badge_txt = "ALTA CONVERGENCIA (+EV)"
+                    badge_bg, badge_bd, badge_cl = "rgba(5, 150, 105, 0.20)", "#10b981", "#6ee7b7"
+                    diag_txt = f"Ambos modelos confirman alta probabilidad ({min(frec_emp, prob_poi)*100.0:.1f}% a {max(frec_emp, prob_poi)*100.0:.1f}%). Mercado líquido consistente."
+                elif delta <= -0.15:
+                    badge_txt = "ALERTA: TRAMPA ESTADÍSTICA"
+                    badge_bg, badge_bd, badge_cl = "rgba(239, 68, 68, 0.15)", "#ef4444", "#f87171"
+                    diag_txt = f"Poisson proyecta mayor probabilidad que la realidad histórica ({delta*100.0:.1f}%). Riesgo de cuota inflada por el mercado."
+                elif frec_emp <= 0.40 and prob_poi <= 0.40:
+                    badge_txt = "TENDENCIA UNDER CONFIRMADA"
+                    badge_bg, badge_bd, badge_cl = "rgba(56, 189, 248, 0.15)", "#38bdf8", "#7dd3fc"
+                    diag_txt = "Convergencia de ambos motores hacia baja anotación. Valor defensivo contrastado."
                 else:
-                    st.info(f"Sin registros recientes para {eq1}.")
+                    badge_txt = "MERCADO EQUILIBRADO"
+                    badge_bg, badge_bd, badge_cl = "rgba(148, 163, 184, 0.15)", "#94a3b8", "#cbd5e1"
+                    diag_txt = f"Muestra empírica ({frec_emp*100.0:.1f}%) alineada con el modelo matemático ({prob_poi*100.0:.1f}%). Distribución estándar."
 
-            with col_f_vis:
-                st.markdown(f"#### ✈️ Forma Reciente en Liga — Últimos 3 de {eq2}")
-                df_u3_vis = _construir_tabla_ultimos_3(df_sql_h2h, eq2)
-                if not df_u3_vis.empty:
-                    st.dataframe(df_u3_vis, width="stretch", hide_index=True)
-                else:
-                    st.info(f"Sin registros recientes para {eq2}.")
+                html_radar_items += (
+                    f'<div style="background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 8px; padding: 9px 12px; margin-bottom: 7px;">'
+                    f'<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">'
+                    f'<span style="font-size: 0.82rem; font-weight: 700; color: #f8fafc;">{nombre_m}</span>'
+                    f'<span style="font-size: 0.65rem; font-weight: 800; padding: 2px 8px; border-radius: 999px; background: {badge_bg}; border: 1px solid {badge_bd}; color: {badge_cl};">{badge_txt}</span>'
+                    f'</div>'
+                    f'<div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.74rem; color: #94a3b8; font-family: monospace; margin-bottom: 4px;">'
+                    f'<span>Empírico: <b style="color: #38bdf8;">{frec_emp*100.0:.1f}%</b> (@{cuota_emp:.2f})</span>'
+                    f'<span>Poisson: <b style="color: #818cf8;">{prob_poi*100.0:.1f}%</b> (@{cuota_poi:.2f})</span>'
+                    f'<span>Δ Dif: <b style="color: {badge_cl};">{delta*100.0:+.1f}%</b></span>'
+                    f'</div>'
+                    f'<div style="font-size: 0.70rem; color: #cbd5e1; line-height: 1.35;">{diag_txt}</div>'
+                    f'</div>'
+                )
+
+            # Renderizado dual 50/50
+            col_historial, col_radar = st.columns([0.50, 0.50], gap="medium")
+
+            with col_historial:
+                html_col_izq = (
+                    f'<div style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 16px;">'
+                    f'<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">'
+                    f'<div style="display: flex; align-items: center; gap: 8px;">'
+                    f'<span style="font-size: 1.1rem;">⚔️</span>'
+                    f'<span style="font-size: 0.95rem; font-weight: 800; color: #f8fafc; letter-spacing: 0.3px;">Historial Directo y Racha Reciente</span>'
+                    f'</div>'
+                    f'<span style="font-size: 0.68rem; color: #94a3b8; font-weight: 600; text-transform: uppercase;">Muestra Oficial</span>'
+                    f'</div>'
+                    f'<div style="font-size: 0.72rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">Enfrentamientos Directos Recientes ({eq1} vs {eq2})</div>'
+                    f'{html_h2h_dir}'
+                    f'<div style="font-size: 0.72rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 14px; margin-bottom: 6px;">Forma Reciente Oficial (Últimos Partidos)</div>'
+                    f'<div style="font-size: 0.72rem; font-weight: 700; color: #38bdf8; margin: 6px 0 4px 0;">🏠 {eq1}</div>'
+                    f'{html_tiras_loc}'
+                    f'<div style="font-size: 0.72rem; font-weight: 700; color: #818cf8; margin: 10px 0 4px 0;">✈️ {eq2}</div>'
+                    f'{html_tiras_vis}'
+                    f'</div>'
+                )
+                st.markdown(html_col_izq, unsafe_allow_html=True)
+
+            with col_radar:
+                html_col_der = (
+                    f'<div style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(16, 185, 129, 0.20); border-radius: 10px; padding: 16px;">'
+                    f'<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">'
+                    f'<div style="display: flex; align-items: center; gap: 8px;">'
+                    f'<span style="font-size: 1.1rem;">⚡</span>'
+                    f'<span style="font-size: 0.95rem; font-weight: 800; color: #f8fafc; letter-spacing: 0.3px;">Radar de Ineficiencias de Mercado (+EV)</span>'
+                    f'</div>'
+                    f'<span style="font-size: 0.68rem; color: #10b981; background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.30); padding: 2px 8px; border-radius: 999px; font-weight: 700;">DUAL ENGINE</span>'
+                    f'</div>'
+                    f'{html_radar_items}'
+                    f'<div style="margin-top: 10px; font-size: 0.70rem; color: #94a3b8; text-align: center; border-top: 1px solid rgba(255, 255, 255, 0.06); padding-top: 8px;">'
+                    f'Algoritmo Dual: Cruza frecuencias empíricas condicionadas vs distribución Poisson bivariante (xG).'
+                    f'</div>'
+                    f'</div>'
+                )
+                st.markdown(html_col_der, unsafe_allow_html=True)
 
             # ── 7. EXPORTACIÓN EJECUTIVA 1-CLICK (COPIAR FICHA DEL PARTIDO) ──
             st.markdown("---")
@@ -8502,7 +9034,7 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
             ficha_partido_txt = (
                 f"=== FICHA EJECUTIVA H2H: {eq1} vs {eq2} ({liga_h2h_nom}) ===\n"
                 f"• Goles Esperados (xG Proyectado): {eq1} {xg_l:.2f} — {eq2} {xg_v:.2f}"
-                + (" [Muestra Total Oficial + Factor Campo Activo]\n" if es_muestra_reducida else "\n")
+                + (" (Muestra Total Oficial + Factor Campo Activo)\n" if es_muestra_reducida else "\n")
                 + f"• Cuotas Justas 1X2: Local ({eq1}) {1.0 / p_1:.2f} ({p_1 * 100:.1f}%) | "
                 f"Empate {1.0 / p_x:.2f} ({p_x * 100:.1f}%) | Visitante ({eq2}) {1.0 / p_2:.2f} ({p_2 * 100:.1f}%)\n"
                 f"• Mercados de Goles: Over 2.5 Cuota: {1.0 / p_o25:.2f} ({p_o25 * 100:.1f}%) | "
@@ -8512,7 +9044,73 @@ elif menu_seleccionado == "⚔️ Comparador H2H (Cara a Cara)":
                 f"(Supremacía: {supremacia_xg:+.2f} xG | DNB {eq1}: {cuota_dnb_loc:.2f} / {eq2}: {cuota_dnb_vis:.2f})"
             )
 
-            btn_ficha = st.button("📋 Copiar Ficha del Partido", type="primary", key="btn_copiar_ficha_h2h")
+            col_btn_copiar, col_btn_track = st.columns((0.5, 0.5))
+            with col_btn_copiar:
+                btn_ficha = st.button(
+                    "📋 Copiar Ficha del Partido",
+                    type="primary",
+                    use_container_width=True,
+                    key="btn_copiar_ficha_h2h",
+                )
+            with col_btn_track:
+                with st.popover("➕ Registrar Apuesta", use_container_width=True):
+                    st.markdown(f"**Registrar Pick: {eq1} vs {eq2}**")
+                    cat_mercado = st.selectbox(
+                        "Categoría",
+                        ("Goles", "Tiros a Puerta", "Córners", "Faltas", "Tarjetas", "Hándicap / 1X2"),
+                        key="pop_cat_h2h",
+                    )
+                    det_mercado = st.text_input(
+                        "Mercado / Selección",
+                        placeholder="Ej: Menos de 12.5 Faltas Everton",
+                        key="pop_det_h2h",
+                    )
+
+                    c_cuota, c_stake = st.columns(2)
+                    with c_cuota:
+                        cuota_in = st.number_input(
+                            "Cuota Bookie",
+                            min_value=1.01,
+                            max_value=50.0,
+                            value=1.85,
+                            step=0.01,
+                            key="pop_cuota_h2h",
+                        )
+                    with c_stake:
+                        stake_in = st.number_input(
+                            "Stake (Uds)",
+                            min_value=0.1,
+                            max_value=10.0,
+                            value=1.0,
+                            step=0.5,
+                            key="pop_stake_h2h",
+                        )
+
+                    if st.button("Guardar en Historial", type="primary", use_container_width=True, key="btn_save_pop_h2h"):
+                        if det_mercado.strip():
+                            _comp_reg = (
+                                competicion_actual
+                                if "competicion_actual" in locals()
+                                else (str(liga_h2h_nom) if "liga_h2h_nom" in locals() else "Oficial")
+                            )
+                            _inicializar_tabla_registro_apuestas()
+                            conn = sqlite3.connect(RUTA_BD)
+                            c = conn.cursor()
+                            c.execute(
+                                """
+                                INSERT INTO registro_cuotas_apuestas 
+                                (fecha_registro, competicion, equipo_local, equipo_visitante, mercado_categoria, mercado_detalle, cuota_bookie, stake, estado, unidades_balance, tipo_ticket)
+                                VALUES (datetime('now', 'localtime'), ?, ?, ?, ?, ?, ?, ?, 'PENDIENTE', 0.0, 'SIMPLE')
+                                """,
+                                (_comp_reg, eq1, eq2, cat_mercado, det_mercado.strip(), float(cuota_in), float(stake_in)),
+                            )
+                            conn.commit()
+                            conn.close()
+                            st.success("Pick registrado correctamente en macro_base_futbol.db")
+                            st.rerun()
+                        else:
+                            st.warning("Introduce la selección del mercado antes de guardar.")
+
             with st.expander("📋 Ficha Ejecutiva del Partido (Lista para copiar en 1 clic)", expanded=bool(btn_ficha)):
                 if btn_ficha:
                     st.success("✅ Ficha ejecutiva generada. Haz clic en el icono de copia en la esquina superior derecha del bloque:")
@@ -12118,3 +12716,480 @@ elif menu_seleccionado == "🧮 Hándicap Asiático Avanzado":
 
 elif menu_seleccionado == "🎯 Escáner Autónomo de Ineficiencias (+EV Scanner)":
     ev_render_modulo()
+
+elif menu_seleccionado in ("📒 Historial de Apuestas", "📒 Historial y Registro de Apuestas"):
+    _inicializar_tabla_registro_apuestas()
+
+    st.markdown(
+        """
+        <div style="background: linear-gradient(135deg, rgba(15, 23, 42, 0.92) 0%, rgba(30, 41, 59, 0.85) 100%); border: 1px solid rgba(56, 189, 248, 0.22); border-left: 4px solid #10b981; border-radius: 12px; padding: 20px 24px; margin-bottom: 20px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <div style="font-size: 0.72rem; font-weight: 800; color: #10b981; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px;">AUDITORÍA DE BANKROLL &amp; RENDIMIENTO CUANTITATIVO</div>
+                    <div style="font-size: 1.55rem; font-weight: 900; color: #f8fafc; letter-spacing: -0.01em;">📒 Historial y Registro de Apuestas (+EV Bet Tracker)</div>
+                </div>
+                <span style="background: rgba(16, 185, 129, 0.14); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 999px; padding: 5px 14px; font-size: 0.72rem; font-weight: 800;">SQLite Sync Activo</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # 1. Consulta parametrizada de registros (incluye tipo_ticket)
+    _registros_apuestas = ()
+    try:
+        with sqlite3.connect(RUTA_BD) as _conn_hist_bets:
+            _cur_hist_bets = _conn_hist_bets.cursor()
+            _cur_hist_bets.execute(
+                """
+                SELECT id, fecha_registro, competicion, equipo_local, equipo_visitante,
+                       mercado_categoria, mercado_detalle, cuota_bookie, stake, estado,
+                       unidades_balance, COALESCE(tipo_ticket, 'SIMPLE') AS tipo_ticket
+                FROM registro_cuotas_apuestas
+                ORDER BY id DESC;
+                """
+            )
+            _registros_apuestas = tuple(_cur_hist_bets.fetchall())
+    except Exception as _err_hist_sql:
+        st.error(f"Error al consultar registro_cuotas_apuestas: {_err_hist_sql}")
+
+    # 2. Cálculo de métricas agregadas (KPIs consolidando Simples y Combinadas)
+    _total_apuestas = len(_registros_apuestas)
+    _acertadas = 0
+    _falladas = 0
+    _pendientes = 0
+    _profit_neto = 0.0
+    _stakes_resueltos = 0.0
+
+    for (
+        _b_id,
+        _b_fecha,
+        _b_comp,
+        _b_loc,
+        _b_vis,
+        _b_cat,
+        _b_det,
+        _b_cuota,
+        _b_stake,
+        _b_est,
+        _b_bal,
+        _b_tipo,
+    ) in _registros_apuestas:
+        _est_norm = str(_b_est or "PENDIENTE").strip().upper()
+        _stake_val = float(_b_stake or 1.0)
+        _bal_val = float(_b_bal or 0.0)
+        if _est_norm == "ACERTADA":
+            _acertadas += 1
+            _profit_neto += _bal_val
+            _stakes_resueltos += _stake_val
+        elif _est_norm == "FALLADA":
+            _falladas += 1
+            _profit_neto += _bal_val
+            _stakes_resueltos += _stake_val
+        else:
+            _pendientes += 1
+
+    _resueltas = _acertadas + _falladas
+    _win_rate = (_acertadas / max(1, _resueltas)) * 100.0 if _resueltas > 0 else 0.0
+    _yield_pct = (_profit_neto / max(0.1, _stakes_resueltos)) * 100.0 if _resueltas > 0 else 0.0
+
+    _color_profit = "#10b981" if _profit_neto >= 0.0 else "#f87171"
+    _color_yield = "#10b981" if _yield_pct >= 0.0 else "#f87171"
+    _color_wr = "#10b981" if _win_rate >= 50.0 else "#f8fafc"
+
+    # 3. Bento Grid 4 KPIs superior (Glassmorphism)
+    _k1, _k2, _k3, _k4 = st.columns(4)
+    with _k1:
+        st.markdown(
+            f"""
+            <div style="background: rgba(15, 23, 42, 0.78); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 16px; min-height: 112px; display: flex; flex-direction: column; justify-content: space-between;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 0.72rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px;">BALANCE NETO (UDS)</span>
+                    <span style="font-size: 0.68rem; color: {_color_profit}; background: rgba(255, 255, 255, 0.04); padding: 2px 8px; border-radius: 999px; font-weight: 700;">Bankroll P&amp;L</span>
+                </div>
+                <div style="font-family: monospace; font-size: 1.75rem; font-weight: 900; color: {_color_profit}; margin: 6px 0;">{_profit_neto:+.2f} uds</div>
+                <div style="font-size: 0.72rem; color: #64748b;">Total registrado: {_total_apuestas} picks</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with _k2:
+        st.markdown(
+            f"""
+            <div style="background: rgba(15, 23, 42, 0.78); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 16px; min-height: 112px; display: flex; flex-direction: column; justify-content: space-between;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 0.72rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px;">WIN RATE (%)</span>
+                    <span style="font-size: 0.68rem; color: #cbd5e1; background: rgba(255, 255, 255, 0.04); padding: 2px 8px; border-radius: 999px; font-weight: 700;">Efectividad</span>
+                </div>
+                <div style="font-family: monospace; font-size: 1.75rem; font-weight: 900; color: {_color_wr}; margin: 6px 0;">{_win_rate:.1f}%</div>
+                <div style="font-size: 0.72rem; color: #64748b;">{_acertadas} V · {_falladas} D ({_resueltas} resueltas)</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with _k3:
+        st.markdown(
+            f"""
+            <div style="background: rgba(15, 23, 42, 0.78); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 16px; min-height: 112px; display: flex; flex-direction: column; justify-content: space-between;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 0.72rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px;">YIELD GLOBAL (%)</span>
+                    <span style="font-size: 0.68rem; color: {_color_yield}; background: rgba(255, 255, 255, 0.04); padding: 2px 8px; border-radius: 999px; font-weight: 700;">ROI Real</span>
+                </div>
+                <div style="font-family: monospace; font-size: 1.75rem; font-weight: 900; color: {_color_yield}; margin: 6px 0;">{_yield_pct:+.1f}%</div>
+                <div style="font-size: 0.72rem; color: #64748b;">Volumen liquidado: {_stakes_resueltos:.1f} uds</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with _k4:
+        st.markdown(
+            f"""
+            <div style="background: rgba(15, 23, 42, 0.78); border: 1px solid rgba(56, 189, 248, 0.20); border-radius: 10px; padding: 16px; min-height: 112px; display: flex; flex-direction: column; justify-content: space-between;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 0.72rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px;">PICKS PENDIENTES</span>
+                    <span style="font-size: 0.68rem; color: #38bdf8; background: rgba(56, 189, 248, 0.12); padding: 2px 8px; border-radius: 999px; font-weight: 700;">En Juego</span>
+                </div>
+                <div style="font-family: monospace; font-size: 1.75rem; font-weight: 900; color: #38bdf8; margin: 6px 0;">{_pendientes}</div>
+                <div style="font-size: 0.72rem; color: #64748b;">Pendientes de liquidación</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+
+    # 4. Acordeón / Formulario manual superior (Simple vs Combinada)
+    with st.expander("➕ Añadir Registro Manual Fuera de H2H", expanded=False):
+        tipo_pick = st.radio(
+            "Modalidad de Apuesta",
+            options=("Simple", "Combinada"),
+            index=0,
+            horizontal=True,
+            key="radio_tipo_apuesta_tracker",
+        )
+
+        if tipo_pick == "Simple":
+            _fm_c1, _fm_c2, _fm_c3 = st.columns(3)
+            with _fm_c1:
+                _man_local = st.text_input("🏠 Equipo Local", placeholder="Ej: Arsenal", key="man_bet_local")
+            with _fm_c2:
+                _man_vis = st.text_input("✈️ Equipo Visitante", placeholder="Ej: Chelsea", key="man_bet_vis")
+            with _fm_c3:
+                _man_comp = st.selectbox(
+                    "🏆 Competición",
+                    (
+                        "Premier League",
+                        "LaLiga",
+                        "Serie A",
+                        "Bundesliga",
+                        "Ligue 1",
+                        "Champions League",
+                        "Europa League",
+                        "Conference League",
+                        "Otra Competición",
+                    ),
+                    key="man_bet_comp",
+                )
+
+            _fm_c4, _fm_c5, _fm_c6, _fm_c7 = st.columns((1.2, 2.2, 0.9, 0.9))
+            with _fm_c4:
+                _man_cat = st.selectbox(
+                    "Categoría de Mercado",
+                    ("Goles", "Tiros a Puerta", "Córners", "Faltas", "Tarjetas", "Hándicap / 1X2"),
+                    key="man_bet_cat",
+                )
+            with _fm_c5:
+                _man_det = st.text_input(
+                    "Mercado / Selección Detallada",
+                    placeholder="Ej: Más de 2.5 Goles / Arsenal Hándicap -0.5",
+                    key="man_bet_det",
+                )
+            with _fm_c6:
+                _man_cuota = st.number_input(
+                    "Cuota Bookie",
+                    min_value=1.01,
+                    max_value=50.0,
+                    value=1.90,
+                    step=0.01,
+                    key="man_bet_cuota",
+                )
+            with _fm_c7:
+                _man_stake = st.number_input(
+                    "Stake (Uds)",
+                    min_value=0.1,
+                    max_value=10.0,
+                    value=1.0,
+                    step=0.5,
+                    key="man_bet_stake",
+                )
+
+            if st.button("💾 Guardar Apuesta en Historial", type="primary", use_container_width=True, key="btn_save_man_bet"):
+                if _man_local.strip() and _man_vis.strip() and _man_det.strip():
+                    with sqlite3.connect(RUTA_BD) as _conn_ins_man:
+                        _cur_ins_man = _conn_ins_man.cursor()
+                        _cur_ins_man.execute(
+                            """
+                            INSERT INTO registro_cuotas_apuestas
+                            (fecha_registro, competicion, equipo_local, equipo_visitante, mercado_categoria, mercado_detalle, cuota_bookie, stake, estado, unidades_balance, tipo_ticket)
+                            VALUES (datetime('now', 'localtime'), ?, ?, ?, ?, ?, ?, ?, 'PENDIENTE', 0.0, 'SIMPLE')
+                            """,
+                            (
+                                _man_comp,
+                                _man_local.strip(),
+                                _man_vis.strip(),
+                                _man_cat,
+                                _man_det.strip(),
+                                float(_man_cuota),
+                                float(_man_stake),
+                            ),
+                        )
+                        _conn_ins_man.commit()
+                    st.success("Apuesta simple registrada correctamente en macro_base_futbol.db")
+                    st.rerun()
+                else:
+                    st.warning("Completa Equipo Local, Equipo Visitante y el Detalle del Mercado para registrar el pick.")
+        else:
+            col_c1, col_c2, col_c3 = st.columns((0.40, 0.30, 0.30))
+            with col_c1:
+                comb_titulo = st.text_input(
+                    "Título o Nombre del Ticket",
+                    placeholder="Ej: Doble Premier League: Faltas + Goles",
+                    key="comb_titulo",
+                )
+            with col_c2:
+                comb_cuota_total = st.number_input(
+                    "Cuota Total Bookie",
+                    min_value=1.01,
+                    max_value=500.0,
+                    step=0.01,
+                    value=2.20,
+                    key="comb_cuota_total",
+                )
+            with col_c3:
+                comb_stake = st.number_input(
+                    "Stake en Uds",
+                    min_value=0.1,
+                    max_value=10.0,
+                    step=0.5,
+                    value=1.0,
+                    key="comb_stake",
+                )
+
+            comb_patas_texto = st.text_area(
+                "Selecciones que componen la combinada (1 por línea)",
+                placeholder="Everton vs Liverpool · Menos de 12.5 Faltas Everton\nArsenal vs Chelsea · Más de 1.5 Goles",
+                height=90,
+                key="comb_patas_texto",
+            )
+
+            if st.button("Guardar Combinada en Historial", type="primary", use_container_width=True, key="btn_save_comb_bet"):
+                if comb_titulo.strip() and comb_patas_texto.strip():
+                    with sqlite3.connect(RUTA_BD) as _conn_ins_comb:
+                        _cur_ins_comb = _conn_ins_comb.cursor()
+                        _cur_ins_comb.execute(
+                            """
+                            INSERT INTO registro_cuotas_apuestas
+                            (fecha_registro, competicion, equipo_local, equipo_visitante, mercado_categoria, mercado_detalle, cuota_bookie, stake, estado, unidades_balance, tipo_ticket)
+                            VALUES (datetime('now', 'localtime'), ?, ?, ?, ?, ?, ?, ?, 'PENDIENTE', 0.0, 'COMBINADA')
+                            """,
+                            (
+                                "Múltiple",
+                                "COMBINADA",
+                                comb_titulo.strip(),
+                                "Combinada",
+                                comb_patas_texto.strip(),
+                                float(comb_cuota_total),
+                                float(comb_stake),
+                            ),
+                        )
+                        _conn_ins_comb.commit()
+                    st.success("Apuesta combinada registrada correctamente en macro_base_futbol.db")
+                    st.rerun()
+                else:
+                    st.warning("Completa el Título del Ticket y las Selecciones de la combinada antes de guardar.")
+
+    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <span style="font-size: 0.95rem; font-weight: 800; color: #f8fafc;">📋 Feed Cronológico de Operaciones Registradas</span>
+            <span style="font-size: 0.70rem; color: #94a3b8; font-weight: 600; text-transform: uppercase;">Liquidación Instantánea 1-Click</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # 5. Feed de Apuestas en Tiras Flexbox Glassmorphism (Cero tablas HTML y cero corchetes)
+    if not _registros_apuestas:
+        st.markdown(
+            """
+            <div style="background: rgba(15, 23, 42, 0.65); border: 1px dashed rgba(148, 163, 184, 0.25); border-radius: 10px; padding: 28px; text-align: center; color: #94a3b8; font-size: 0.85rem;">
+                No hay apuestas registradas todavía. Usa el botón <b>➕ Registrar Apuesta</b> en el Comparador H2H o el formulario superior para inaugurar tu historial.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        for (
+            _r_id,
+            _r_fecha,
+            _r_comp,
+            _r_loc,
+            _r_vis,
+            _r_cat,
+            _r_det,
+            _r_cuota,
+            _r_stake,
+            _r_estado,
+            _r_balance,
+            _r_tipo,
+        ) in _registros_apuestas:
+            _est_str = str(_r_estado or "PENDIENTE").strip().upper()
+            _tipo_str = str(_r_tipo or "SIMPLE").strip().upper()
+            _es_combinada = _tipo_str == "COMBINADA" or str(_r_loc or "").strip().upper() == "COMBINADA"
+            _cuota_f = float(_r_cuota or 1.85)
+            _stake_f = float(_r_stake or 1.0)
+            _bal_f = float(_r_balance or 0.0)
+            _comp_clean = html.escape(str(_r_comp or "Oficial"))
+            _loc_clean = html.escape(str(_r_loc or "Local"))
+            _vis_clean = html.escape(str(_r_vis or "Visitante"))
+            _cat_clean = html.escape(str(_r_cat or "Mercado"))
+            _det_clean = html.escape(str(_r_det or "-"))
+            _fecha_clean = html.escape(str(_r_fecha or ""))
+
+            if _est_str == "ACERTADA":
+                _unidades_win = round((_cuota_f - 1.0) * _stake_f, 2) if _bal_f == 0.0 else _bal_f
+                _badge_estado_html = (
+                    f'<div style="display: flex; align-items: center; gap: 8px; min-width: 145px;">'
+                    f'<span style="background: rgba(16, 185, 129, 0.20); border: 1px solid #10b981; color: #10b981; font-weight: 900; font-size: 0.78rem; width: 26px; height: 26px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center;">V</span>'
+                    f'<span style="font-family: monospace; font-size: 0.85rem; font-weight: 800; color: #10b981; background: rgba(16, 185, 129, 0.12); padding: 3px 9px; border-radius: 6px; border: 1px solid rgba(16, 185, 129, 0.30);">+{_unidades_win:.2f} uds</span>'
+                    f'</div>'
+                )
+                _borde_card = "rgba(16, 185, 129, 0.28)"
+            elif _est_str == "FALLADA":
+                _unidades_loss = -round(_stake_f, 2) if _bal_f == 0.0 else _bal_f
+                _badge_estado_html = (
+                    f'<div style="display: flex; align-items: center; gap: 8px; min-width: 145px;">'
+                    f'<span style="background: rgba(248, 113, 113, 0.20); border: 1px solid #f87171; color: #f87171; font-weight: 900; font-size: 0.78rem; width: 26px; height: 26px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center;">D</span>'
+                    f'<span style="font-family: monospace; font-size: 0.85rem; font-weight: 800; color: #f87171; background: rgba(248, 113, 113, 0.12); padding: 3px 9px; border-radius: 6px; border: 1px solid rgba(248, 113, 113, 0.30);">{_unidades_loss:.2f} uds</span>'
+                    f'</div>'
+                )
+                _borde_card = "rgba(248, 113, 113, 0.28)"
+            else:
+                _badge_estado_html = (
+                    '<div style="display: flex; align-items: center; gap: 8px; min-width: 145px;">'
+                    '<span style="background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.40); color: #38bdf8; font-weight: 800; font-size: 0.70rem; padding: 4px 10px; border-radius: 999px; letter-spacing: 0.04em;">⏳ PENDIENTE</span>'
+                    '</div>'
+                )
+                _borde_card = "rgba(56, 189, 248, 0.22)"
+
+            _col_strip, _col_actions = st.columns((0.73, 0.27))
+            with _col_strip:
+                if _es_combinada:
+                    _patas_html = ""
+                    for _linea_pata in str(_r_det or "").splitlines():
+                        _pata_limpia = html.escape(_linea_pata.strip())
+                        if _pata_limpia:
+                            _patas_html += (
+                                f'<div style="font-size: 0.74rem; color: #cbd5e1; background: rgba(255, 255, 255, 0.02); padding: 6px 10px; border-radius: 4px; margin-top: 6px; border-left: 2px solid #c084fc;">'
+                                f'• {_pata_limpia}'
+                                f'</div>'
+                            )
+                    if not _patas_html:
+                        _patas_html = (
+                            f'<div style="font-size: 0.74rem; color: #cbd5e1; background: rgba(255, 255, 255, 0.02); padding: 6px 10px; border-radius: 4px; margin-top: 6px; border-left: 2px solid #c084fc;">'
+                            f'• {_det_clean}'
+                            f'</div>'
+                        )
+
+                    st.markdown(
+                        f'<div style="border: 1px solid rgba(168, 85, 247, 0.3); background: rgba(15, 23, 42, 0.75); padding: 12px 16px; border-radius: 8px; margin-bottom: 8px;">'
+                        f'<div style="display: flex; justify-content: space-between; align-items: center; gap: 14px;">'
+                        f'<div style="display: flex; align-items: center; gap: 8px;">'
+                        f'{_badge_estado_html}'
+                        f'<span style="background: rgba(168, 85, 247, 0.15); color: #c084fc; font-weight: 700; font-size: 0.70rem; padding: 2px 8px; border-radius: 4px; border: 1px solid rgba(168, 85, 247, 0.35);">COMBINADA</span>'
+                        f'</div>'
+                        f'<div style="flex: 1; min-width: 0;">'
+                        f'<div style="font-size: 0.68rem; color: #94a3b8; font-weight: 600; margin-bottom: 2px;">{_fecha_clean} &nbsp;·&nbsp; <span style="color: #c084fc;">Ticket Múltiple</span></div>'
+                        f'<div style="font-size: 0.88rem; font-weight: 800; color: #f8fafc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{_vis_clean}</div>'
+                        f'</div>'
+                        f'<div style="display: flex; align-items: center; gap: 10px;">'
+                        f'<div style="text-align: right;">'
+                        f'<div style="font-family: monospace; font-size: 0.92rem; font-weight: 900; color: #f8fafc; background: rgba(168, 85, 247, 0.12); padding: 3px 9px; border-radius: 6px; border: 1px solid rgba(168, 85, 247, 0.30);">@{_cuota_f:.2f}</div>'
+                        f'<div style="font-family: monospace; font-size: 0.68rem; color: #94a3b8; margin-top: 2px;">Stake: {_stake_f:.1f} uds</div>'
+                        f'</div>'
+                        f'</div>'
+                        f'</div>'
+                        f'{_patas_html}'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        f'<div style="background: rgba(15, 23, 42, 0.78); border: 1px solid {_borde_card}; border-radius: 10px; padding: 11px 16px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; gap: 14px;">'
+                        f'{_badge_estado_html}'
+                        f'<div style="flex: 1; min-width: 0;">'
+                        f'<div style="font-size: 0.68rem; color: #94a3b8; font-weight: 600; margin-bottom: 2px;">{_fecha_clean} &nbsp;·&nbsp; <span style="color: #38bdf8;">{_comp_clean}</span> &nbsp;·&nbsp; <span style="color: #cbd5e1;">{_cat_clean}</span></div>'
+                        f'<div style="font-size: 0.86rem; font-weight: 800; color: #f8fafc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{_loc_clean} vs {_vis_clean} &nbsp;—&nbsp; <span style="color: #34d399; font-weight: 700;">{_det_clean}</span></div>'
+                        f'</div>'
+                        f'<div style="display: flex; align-items: center; gap: 10px;">'
+                        f'<div style="text-align: right;">'
+                        f'<div style="font-family: monospace; font-size: 0.92rem; font-weight: 900; color: #f8fafc; background: rgba(255, 255, 255, 0.05); padding: 3px 9px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.08);">@{_cuota_f:.2f}</div>'
+                        f'<div style="font-family: monospace; font-size: 0.68rem; color: #94a3b8; margin-top: 2px;">Stake: {_stake_f:.1f} uds</div>'
+                        f'</div>'
+                        f'</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+            with _col_actions:
+                if _est_str == "PENDIENTE":
+                    _b_c1, _b_c2, _b_c3 = st.columns((1.15, 1.15, 0.65))
+                    with _b_c1:
+                        if st.button("✅ Ganada", use_container_width=True, key=f"btn_win_bet_{_r_id}"):
+                            _bal_win = round((_cuota_f - 1.0) * _stake_f, 2)
+                            with sqlite3.connect(RUTA_BD) as _conn_u_win:
+                                _conn_u_win.execute(
+                                    "UPDATE registro_cuotas_apuestas SET estado = 'ACERTADA', unidades_balance = ? WHERE id = ?",
+                                    (_bal_win, int(_r_id)),
+                                )
+                                _conn_u_win.commit()
+                            st.rerun()
+                    with _b_c2:
+                        if st.button("❌ Perdida", use_container_width=True, key=f"btn_loss_bet_{_r_id}"):
+                            _bal_loss = -round(_stake_f, 2)
+                            with sqlite3.connect(RUTA_BD) as _conn_u_loss:
+                                _conn_u_loss.execute(
+                                    "UPDATE registro_cuotas_apuestas SET estado = 'FALLADA', unidades_balance = ? WHERE id = ?",
+                                    (_bal_loss, int(_r_id)),
+                                )
+                                _conn_u_loss.commit()
+                            st.rerun()
+                    with _b_c3:
+                        if st.button("🗑️", use_container_width=True, key=f"btn_del_bet_{_r_id}"):
+                            with sqlite3.connect(RUTA_BD) as _conn_u_del:
+                                _conn_u_del.execute(
+                                    "DELETE FROM registro_cuotas_apuestas WHERE id = ?",
+                                    (int(_r_id),),
+                                )
+                                _conn_u_del.commit()
+                            st.rerun()
+                else:
+                    _b_r1, _b_r2 = st.columns((1.6, 0.8))
+                    with _b_r1:
+                        if st.button("↩️ Pendiente", use_container_width=True, key=f"btn_reset_bet_{_r_id}"):
+                            with sqlite3.connect(RUTA_BD) as _conn_u_rst:
+                                _conn_u_rst.execute(
+                                    "UPDATE registro_cuotas_apuestas SET estado = 'PENDIENTE', unidades_balance = 0.0 WHERE id = ?",
+                                    (int(_r_id),),
+                                )
+                                _conn_u_rst.commit()
+                            st.rerun()
+                    with _b_r2:
+                        if st.button("🗑️", use_container_width=True, key=f"btn_del_res_bet_{_r_id}"):
+                            with sqlite3.connect(RUTA_BD) as _conn_u_del2:
+                                _conn_u_del2.execute(
+                                    "DELETE FROM registro_cuotas_apuestas WHERE id = ?",
+                                    (int(_r_id),),
+                                )
+                                _conn_u_del2.commit()
+                            st.rerun()
